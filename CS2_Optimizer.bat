@@ -3,6 +3,7 @@
 set "CS2OPT_SELF=%~f0"
 if /i "%~1"=="iz" goto :vis
 if /i "%~1"=="image" goto :vis
+if /i "%~1"=="test" goto :vis
 start "" /min powershell -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
 exit /b
 :vis
@@ -12,7 +13,7 @@ exit /b
 #>
 param([string]$Mode = '')
 # =====================================================================
-#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, YEKUN VERSIYA
+#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v3 (goruntu + FPS balansi)
 #  Muellif: yusifcatharsis (github.com/yusifcatharsis) | Telegram: @jeisterx
 #  Lisenziya: MIT | https://github.com/yusifcatharsis/cs2-netcafe-optimizer
 #
@@ -34,6 +35,8 @@ param([string]$Mode = '')
 #   CS2_Optimizer.bat iz    -> CS2 boyuk yenilemeden sonra oxuma siyahisini
 #                              yenileyir (Steam-e girin, sonra isledin)
 #   CS2_Optimizer.bat play  -> CS2-ni acir (menyu ucun, mecburi deyil)
+#   CS2_Optimizer.bat test  -> yoxlama: sistemi tanir, hansi ayarlarin yazilacagini
+#                              gosterir, hec neyi deyismir
 #   CS2_Optimizer.bat image -> YALNIZ SUPER REJIMDE, bir defe: VBS / Memory
 #                              Integrity-ni sondurur (sonra image-i saxlayin)
 #
@@ -42,20 +45,23 @@ param([string]$Mode = '')
 
 # ======================= AYARLAR =====================================
 $ShareDir     = '\\SERVER\share\cs2_shader'  # <-- DEYISIN: serverde paylasilan qovluq (shader arxivi, siyahi, jurnal)
-$MSAA         = 4      # 4 = hamar kenarlar (pikselsiz) | 0 = max FPS amma kenarlar pilleli
+$Quality      = 'auto' # auto = video karta gore | high | mid | low  (asagidaki cedvele bax)
+#   high: 4x MSAA, 8x AF, kolge High,   tekstur Medium  (RTX 4070+/5070+/3080+, RX 7800+)
+#   mid : 2x MSAA, 4x AF, kolge Medium, tekstur Medium  (RTX 4060/3060/3070/5060, RX 6600-7700)
+#   low : CMAA2,   2x AF, kolge Medium, tekstur Low     (zeif kartlar)
 $Reflex       = 1      # NVIDIA Reflex: 0 off | 1 on | 2 on+boost
 $Contrast     = 1      # Boost Player Contrast
 $FpsMax       = 0      # 0 = limitsiz
 $FpsMaxUI     = 200    # menyuda FPS limiti
 $PrewarmOn    = 1      # 1 = CS2 fayllarini RAM-a evvelceden oxu
-$PrewarmDelay = 180    # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
+$PrewarmDelay = 90     # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
 $ShaderOn     = 1      # 1 = shader cache geri yukle / yig
 $ShaderMaxMB  = 3000   # her kart ucun arxiv limiti (MB)
 # =====================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
-$Visible = ($Mode -eq 'iz' -or $Mode -eq 'image')
+$Visible = ($Mode -in 'iz', 'image', 'test')
 $Self = $env:CS2OPT_SELF
 $SelfDir = ''
 if ($Self) { $SelfDir = Split-Path -Parent $Self }
@@ -116,7 +122,8 @@ function Find-SteamDirs {
   foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam', 'HKLM:\SOFTWARE\Valve\Steam') { try { $p = (Get-ItemProperty $k -ErrorAction Stop).InstallPath; if ($p) { $c.Add($p) } } catch {} }
   foreach ($d in 'Z', 'E', 'D', 'C') { $c.Add("${d}:\Steam") }
   $c.Add("${env:ProgramFiles(x86)}\Steam")
-  @($c | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'steam.exe') } | ForEach-Object { $_.TrimEnd('\') } | Select-Object -Unique)
+  $seen = @{}
+  @($c | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'steam.exe') } | ForEach-Object { $_.TrimEnd('\') } | Where-Object { $k = $_.ToLowerInvariant(); if ($seen.ContainsKey($k)) { $false } else { $seen[$k] = 1; $true } })
 }
 function Find-Game($steamDirs) {
   $libs = @()
@@ -144,6 +151,10 @@ function Get-SysInfo {
   $o.Driver = ([string]$gpu.DriverVersion).Trim()
   $o.GpuKey = (($o.GpuName -creplace '[^A-Za-z0-9 \-\._]', '').Trim() -replace ' ', '_')
   $o.Nvidia = ($o.Ven -eq 4318)
+  $n = $o.GpuName
+  $o.Tier = 'low'
+  if ($n -match 'RTX\s*(40[7-9]0|50[7-9]0|30[89]0)|RX\s*(7[89]00|79[05]0|90[67]0)|TITAN') { $o.Tier = 'high' }
+  elseif ($n -match 'RTX\s*(4060|3060|3070|5060|2080|2070)|RX\s*(66|67|68|69|76|77)\d\d|Arc\s*A7|Arc\s*B5') { $o.Tier = 'mid' }
   $disp = $gpus | Where-Object { $_.CurrentHorizontalResolution } | Select-Object -First 1
   $o.W = [int]$disp.CurrentHorizontalResolution; $o.H = [int]$disp.CurrentVerticalResolution
   if ($o.W -lt 800 -or $o.H -lt 600) { $o.W = 1920; $o.H = 1080 }
@@ -159,6 +170,13 @@ function Get-SysInfo {
 # ---------------------------------------------------------------------
 function Get-VideoCfgText {
   $rf = $Reflex; if (-not $SI.Nvidia) { $rf = 0 }
+  $q = $Quality; if ($q -notin 'high', 'mid', 'low') { $q = $SI.Tier }
+  switch ($q) {
+    'high'  { $msaa = 4; $cmaa = 0; $af = 4; $sh = 2; $tx = 1 }
+    'mid'   { $msaa = 2; $cmaa = 0; $af = 3; $sh = 1; $tx = 1 }
+    default { $msaa = 0; $cmaa = 1; $af = 2; $sh = 1; $tx = 0 }
+  }
+  $script:QualityUsed = $q
   $t = @"
 "video.cfg"
 {
@@ -183,12 +201,12 @@ function Get-VideoCfgText {
 	"setting.r_low_latency"		"$rf"
 	"setting.r_player_visibility_mode"		"$Contrast"
 	"setting.shaderquality"		"0"
-	"setting.r_texturefilteringquality"		"5"
-	"setting.msaa_samples"		"$MSAA"
-	"setting.r_csgo_cmaa_enable"		"0"
-	"setting.videocfg_shadow_quality"		"2"
+	"setting.r_texturefilteringquality"		"$af"
+	"setting.msaa_samples"		"$msaa"
+	"setting.r_csgo_cmaa_enable"		"$cmaa"
+	"setting.videocfg_shadow_quality"		"$sh"
 	"setting.videocfg_dynamic_shadows"		"1"
-	"setting.videocfg_texture_detail"		"1"
+	"setting.videocfg_texture_detail"		"$tx"
 	"setting.videocfg_particle_detail"		"0"
 	"setting.videocfg_ao_detail"		"0"
 	"setting.videocfg_hdr_detail"		"-1"
@@ -996,6 +1014,28 @@ csgo\pak01_217.vpk	67-67
 $SteamDirs = @(Find-SteamDirs)
 $Game = Find-Game $SteamDirs
 
+if ($Mode -eq 'test') {
+  $LogFile = Join-Path $WorkDir 'test_log.txt'
+  Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v3 TEST  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+  Log ("Istifadeci: {0}  admin={1}" -f $Me.Name, $IsAdmin)
+  Log "Steam: $($SteamDirs -join ', ')"
+  Log "CS2: $Game"
+  $SI = Get-SysInfo
+  Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz)
+  $VideoText = Get-VideoCfgText
+  Log ("Qrafika profili: {0} (kart sinfi: {1})" -f $QualityUsed, $SI.Tier)
+  try { $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop; Log ("VBS status: {0} (2 = acik)" -f $dg.VirtualizationBasedSecurityStatus) } catch { Log 'VBS: oxunmadi' }
+  $n = 0; foreach ($s in $SteamDirs) { $ud = Join-Path $s 'userdata'; if (Test-Path -LiteralPath $ud) { $n += @(Get-ChildItem -LiteralPath $ud -Directory | Where-Object { $_.Name -match '^\d+$' -and $_.Name -ne '0' }).Count } }
+  Log "Steam hesablari: $n"
+  Log ("Shader arxivi: {0}  movcuddur={1}" -f (Get-ShaderArchive), (Test-Path -LiteralPath (Join-Path (Get-ShaderArchive) 'yigildi.txt')))
+  Log ("Oxuma siyahisi setir: {0}" -f @(Get-PrewarmLines).Count)
+  Set-Content -LiteralPath (Join-Path $WorkDir 'test_cs2_video.txt') -Value $VideoText -Encoding ASCII
+  Log '--- yazilacaq cs2_video.txt ---'
+  foreach ($l in ($VideoText -split "`r?`n")) { if ($l -match 'msaa|cmaa|texturefilter|shadow|texture_detail|refreshrate|defaultres|hdr|fsr|low_latency') { Log $l.Trim() } }
+  Log 'TEST BITDI (hec ne deyisdirilmedi)'
+  try { $d = Join-Path $ShareDir 'jurnal'; New-Item -ItemType Directory -Path $d -Force | Out-Null; Copy-Item -LiteralPath $LogFile -Destination (Join-Path $d "$env:COMPUTERNAME`_test.txt") -Force } catch {}
+  return
+}
 if ($Mode -eq 'iz') { Run-Trace; return }
 if ($Mode -eq 'image') {
   if (-not $IsAdmin) { Write-Host 'XETA: Administrator kimi acin.' -ForegroundColor Red; return }
@@ -1019,7 +1059,7 @@ $Mutex = New-Object System.Threading.Mutex($false, 'Global\cs2opt_daemon')
 $got = $false; try { $got = $Mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
 if (-not $got) { return }
 
-Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v3  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
 Log ("Istifadeci: {0}  admin={1}  system={2}" -f $Me.Name, $IsAdmin, $IsSystem)
 
 # Oyun diski gec qosula biler: 5 deqiqeye qeder gozle
@@ -1033,6 +1073,8 @@ Log "CS2: $Game"
 $SI = Get-SysInfo
 Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz)
 $VideoText = Get-VideoCfgText
+Log ("Qrafika profili: {0} (kart sinfi: {1})" -f $QualityUsed, $SI.Tier)
+try { $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop; if ($dg.VirtualizationBasedSecurityStatus -eq 2) { Log 'DIQQET: VBS / Memory Integrity ACIQDIR (FPS-i ~3% azaldir). Super rejimde: CS2_Optimizer.bat image' } else { Log 'VBS sondurulub' } } catch {}
 
 Apply-MachineTweaks
 Write-Autoexec

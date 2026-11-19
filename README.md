@@ -11,7 +11,7 @@ A single-file, silent Counter-Strike 2 optimizer for internet cafes, built and t
 Runs hidden in the background when the PC boots (nothing is shown on screen) and:
 
 - Detects the GPU, screen resolution and CPU type
-- Writes an optimized `cs2_video.txt` (read-only) for **every** Steam account on the PC, including accounts that log in later
+- Picks a graphics profile from the GPU (high: 4x MSAA / mid: 2x MSAA / low: CMAA2, with anisotropic filtering, medium textures) so the image stays clean without losing much FPS, and writes `cs2_video.txt` for **every** Steam account on the PC, including accounts that log in later (players can still change it in game)
 - Writes `autoexec.cfg`, applies Windows game settings (Game DVR off, Game Mode on, high-performance GPU, fullscreen optimizations off) and the right power plan for the CPU (dual-CCD X3D CPUs keep *Balanced*)
 - Applies NVIDIA driver settings silently if `nvidiaProfileInspector.exe` sits next to the script
 - **Shader cache sharing:** restores the NVIDIA shader cache from a server share before CS2 starts, and collects it back after CS2 closes (archived by GPU model + driver version)
@@ -53,6 +53,7 @@ The pre-warm itself takes ~50–60 s at boot, running in the background before t
 | Command | What it does |
 |---|---|
 | `CS2_Optimizer.bat iz` | Re-measures which file parts CS2 reads up to the main menu (ETW trace) and saves a new pre-warm list to the share. **Run this after big CS2 updates.** Reboot first, log in to Steam, then run it and press Enter when the main menu appears. |
+| `CS2_Optimizer.bat test` | Dry run: shows the detected hardware, chosen graphics profile and the settings it would write. Changes nothing. |
 | `CS2_Optimizer.bat play` | Starts the background service if it is not running, then launches CS2 (optional, for club menus). |
 | `CS2_Optimizer.bat image` | **Super mode / image editing only.** Turns off VBS / Memory Integrity. This gives more FPS but **weakens Windows security**, so use it at your own risk. |
 
