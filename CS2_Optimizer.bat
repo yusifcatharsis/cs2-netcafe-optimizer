@@ -24,11 +24,14 @@ param([string]$Mode = '')
 #   Bu qeder. Musteri CS2-ni Steam-den ozu acir, hec ne gormur.
 #
 #  NE EDIR (arxa planda, ekranda hec ne gostermeden):
-#   - Sistemi tanir (video kart, ekran, prosessor)
-#   - Her Steam hesabina cs2_video.txt yazir (musteri hesaba girende de)
-#   - autoexec.cfg, Windows oyun ayarlari, prosessora gore enerji plani
+#   - Sistemi tanir (video kart, monitorun oz olcusu ve max Hz, prosessor, RAM)
+#   - Video karta gore keyfiyyet secir (high / mid / low) ve her Steam
+#     hesabina cs2_video.txt yazir (musteri hesaba girende de)
+#   - autoexec.cfg, Windows oyun ayarlari, prosessora gore enerji plani,
+#     Defender istisnasi (CS2 fayllari her acilista yoxlanmasin)
 #   - NVIDIA shader cache-i serverden geri yukleyir, CS2 baglananda yigir
-#   - CS2 fayllarini RAM-a evvelceden oxuyur (ilk acilis ~60 san -> ~30 san)
+#   - CS2 fayllarini RAM-a evvelceden oxuyur (ilk acilis ~60 san -> ~30 san),
+#     sonra populyar xeriteleri de (RAM 16 GB+ olanda)
 #
 #  ELAVE REJIMLER (admin ucun, CMD-den):
 #   CS2_Optimizer.bat iz    -> CS2 boyuk yenilemeden sonra oxuma siyahisini
@@ -42,7 +45,9 @@ param([string]$Mode = '')
 
 # ======================= AYARLAR =====================================
 $ShareDir     = '\\SERVER\share\cs2_shader'  # <-- DEYISIN: serverde paylasilan qovluq (shader arxivi, siyahi, jurnal)
-$MSAA         = 4      # 4 = hamar kenarlar (pikselsiz) | 0 = max FPS amma kenarlar pilleli
+$Quality      = 'auto' # auto = video karta gore | low | mid | high (asagida izah var)
+$MSAA         = -1     # -1 = keyfiyyet seviyyesine gore | 0 off | 2 | 4 | 8 (4 = hamar kenarlar)
+$NativeRes    = 1      # 1 = monitorun oz (native) olcusu + en yuksek Hz (bulaniq/60Hz olmasin)
 $Reflex       = 1      # NVIDIA Reflex: 0 off | 1 on | 2 on+boost
 $Contrast     = 1      # Boost Player Contrast
 $FpsMax       = 0      # 0 = limitsiz
@@ -51,6 +56,15 @@ $PrewarmOn    = 1      # 1 = CS2 fayllarini RAM-a evvelceden oxu
 $PrewarmDelay = 180    # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
 $ShaderOn     = 1      # 1 = shader cache geri yukle / yig
 $ShaderMaxMB  = 3000   # her kart ucun arxiv limiti (MB)
+$PrewarmMaps  = 'de_mirage,de_dust2,de_inferno,de_nuke,de_ancient,de_anubis,de_train,de_overpass'  # menyudan sonra RAM-a oxunan xeriteler ('' = sondur)
+$MapsMinRamGB = 16     # xeritelerin evvelceden oxunmasi yalniz bu qeder RAM olanda
+$DefenderExcl = 1      # 1 = Windows Defender CS2 fayllarini her acilista yoxlamasin (yuklenme suretlenir)
+#
+# Keyfiyyet seviyyeleri (auto video kartin adina baxir):
+#   high : RTX 4070+/5070+/3080+, RX 6800+/7800+/9070 -> MSAA 4x, kolge yuksek, shader yuksek, tekstur yuksek
+#   mid  : RTX 4060/4060 Ti/5060/5060 Ti/3060/3070/2070+, RX 6600-7700/9060 -> MSAA 4x, kolge orta, tekstur yuksek
+#   low  : qalanlari (GTX, RTX 2060/3050 ve s.) -> MSAA 2x, kolge orta, tekstur orta
+#   Hamisinda: 16x AF, FSR off, AO off, partikul asagi, HDR performance (FPS-e en cox deyen, gozle az gorunen)
 # =====================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
@@ -149,16 +163,73 @@ function Get-SysInfo {
   if ($o.W -lt 800 -or $o.H -lt 600) { $o.W = 1920; $o.H = 1080 }
   $o.Hz = [int]$disp.CurrentRefreshRate
   if ($o.Hz -lt 50) { $o.Hz = 0 }
+  $o.ResSrc = 'desktop'
+  if ($NativeRes) {
+    $m = Get-MonitorNative
+    if ($m) {
+      $o.W = $m.W; $o.H = $m.H; $o.ResSrc = 'monitor'
+      if ($m.Hz -gt $o.Hz) { $o.Hz = $m.Hz }
+    }
+  }
   $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
   $o.CpuName = ([string]$cpu.Name).Trim()
   $o.CpuType = 'OTHER'
   if ($o.CpuName -match '(7950|7900|9950|9900)X3D') { $o.CpuType = 'X3D_DUAL' } elseif ($o.CpuName -match 'X3D') { $o.CpuType = 'X3D_SINGLE' }
+  $o.RamGB = 0
+  try { $o.RamGB = [int](((Get-CimInstance Win32_PhysicalMemory | Measure-Object Capacity -Sum).Sum) / 1GB) } catch {}
+  if ($o.RamGB -le 0) { try { $o.RamGB = [int][Math]::Ceiling((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB) } catch {} }
+  $o.Tier = $Quality
+  if ($o.Tier -notin 'low', 'mid', 'high') { $o.Tier = Get-GpuTier $o.GpuName }
   $o
+}
+
+# Monitorun EDID-den oz (native) olcusu ve bu olcude en yuksek Hz.
+# root\wmi sinfi SYSTEM (boot task) kimi de isleyir, masaustu ayarindan asili deyil.
+function Get-MonitorNative {
+  try {
+    $mons = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorListedSupportedSourceModes -ErrorAction Stop)
+    $act = @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue | Where-Object { $_.Active } | ForEach-Object { $_.InstanceName })
+    foreach ($mon in $mons) {
+      if ($act.Count -gt 0 -and $act -notcontains $mon.InstanceName) { continue }
+      $modes = @($mon.MonitorSourceModes)
+      if ($modes.Count -eq 0) { continue }
+      $ix = [int]$mon.PreferredMonitorSourceModeIndex
+      if ($ix -lt 0 -or $ix -ge $modes.Count) { $ix = 0 }
+      $w = [int]$modes[$ix].HorizontalActivePixels; $h = [int]$modes[$ix].VerticalActivePixels
+      if ($w -lt 800 -or $h -lt 600) { continue }
+      $hz = 0
+      foreach ($md in $modes) {
+        if ([int]$md.HorizontalActivePixels -ne $w -or [int]$md.VerticalActivePixels -ne $h) { continue }
+        $den = [double]$md.VerticalRefreshRateDenominator; if ($den -le 0) { continue }
+        $r = [int][Math]::Round([double]$md.VerticalRefreshRateNumerator / $den)
+        if ($r -gt $hz -and $r -le 600) { $hz = $r }
+      }
+      return @{ W = $w; H = $h; Hz = $hz }
+    }
+  } catch {}
+  $null
+}
+
+function Get-GpuTier([string]$name) {
+  $n = $name.ToUpperInvariant()
+  if ($n -match 'RTX\s*(40[789]0|50[789]0|30[89]0)|RX\s*(68\d0|69\d0|78\d0|79\d0|907\d)') { return 'high' }
+  if ($n -match 'RTX\s*(4060|5060|306\d|307\d|207\d|208\d)|RX\s*(66\d0|67\d0|76\d0|77\d0|906\d)|ARC(\(TM\))?\s*[AB]7') { return 'mid' }
+  'low'
+}
+function Get-TierSettings([string]$tier) {
+  # shader: 0 asagi 1 yuksek | kolge: 0 asagi 1 orta 2 yuksek 3 cox yuksek | tekstur: 0 asagi 1 orta 2 yuksek
+  switch ($tier) {
+    'high' { @{ Msaa = 4; Shader = 1; Shadow = 2; Texture = 2; Particle = 1 } }
+    'mid'  { @{ Msaa = 4; Shader = 0; Shadow = 1; Texture = 2; Particle = 0 } }
+    default { @{ Msaa = 2; Shader = 0; Shadow = 1; Texture = 1; Particle = 0 } }
+  }
 }
 
 # ---------------------------------------------------------------------
 function Get-VideoCfgText {
   $rf = $Reflex; if (-not $SI.Nvidia) { $rf = 0 }
+  $q = Get-TierSettings $SI.Tier
+  $aa = $q.Msaa; if ($MSAA -ge 0) { $aa = $MSAA }
   $t = @"
 "video.cfg"
 {
@@ -182,14 +253,14 @@ function Get-VideoCfgText {
 	"AutoConfig"		"0"
 	"setting.r_low_latency"		"$rf"
 	"setting.r_player_visibility_mode"		"$Contrast"
-	"setting.shaderquality"		"0"
+	"setting.shaderquality"		"$($q.Shader)"
 	"setting.r_texturefilteringquality"		"5"
-	"setting.msaa_samples"		"$MSAA"
-	"setting.r_csgo_cmaa_enable"		"0"
-	"setting.videocfg_shadow_quality"		"2"
+	"setting.msaa_samples"		"$aa"
+	"setting.r_csgo_cmaa_enable"		"$(if ($aa -eq 0) { 1 } else { 0 })"
+	"setting.videocfg_shadow_quality"		"$($q.Shadow)"
 	"setting.videocfg_dynamic_shadows"		"1"
-	"setting.videocfg_texture_detail"		"1"
-	"setting.videocfg_particle_detail"		"0"
+	"setting.videocfg_texture_detail"		"$($q.Texture)"
+	"setting.videocfg_particle_detail"		"$($q.Particle)"
 	"setting.videocfg_ao_detail"		"0"
 	"setting.videocfg_hdr_detail"		"-1"
 	"setting.videocfg_fsr_detail"		"0"
@@ -234,6 +305,7 @@ function Write-Autoexec {
 // NetCafe CS2 autoexec
 fps_max $FpsMax
 fps_max_ui $FpsMaxUI
+rate 786432
 engine_low_latency_sleep_after_client_tick true
 r_show_build_info false
 cl_teamid_overhead_fade_near_crosshair 1
@@ -244,9 +316,24 @@ cl_teamid_overhead_fade_near_crosshair 1
 function Apply-MachineTweaks {
   if (-not $IsAdmin) { Log 'Admin deyil: enerji plani / prioritet kecildi'; return }
   if ($SI.CpuType -eq 'X3D_DUAL') { & powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e 2>$null | Out-Null }
-  else { & powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null }
+  else {
+    & powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      # bezi image-lerde "High performance" plani silinib: yeniden yarat
+      & powercfg -duplicatescheme 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null
+      & powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>$null | Out-Null
+    }
+  }
   Set-Reg 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\cs2.exe\PerfOptions' 'CpuPriorityClass' 3 'DWord'
   Log "Enerji plani ve prioritet tetbiq edildi ($($SI.CpuType))"
+}
+function Apply-DefenderExcl {
+  if (-not $DefenderExcl -or -not $IsAdmin) { return }
+  if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) { return }
+  try {
+    Add-MpPreference -ExclusionPath $Game -ExclusionProcess $Cs2Exe -ErrorAction Stop
+    Log 'Defender istisnasi elave edildi (CS2 qovlugu ve cs2.exe)'
+  } catch { Log 'Defender istisnasi elave olunmadi (Defender sondurulub ve ya icaze yoxdur)' }
 }
 function Apply-UserTweaks($ctx) {
   $r = $ctx.Root
@@ -275,6 +362,7 @@ function Apply-Nvidia {
       <ProfileSetting><SettingNameInfo>Power management mode</SettingNameInfo><SettingID>274197361</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Vertical Sync</SettingNameInfo><SettingID>11041231</SettingID><SettingValue>138504007</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Texture filtering - Quality</SettingNameInfo><SettingID>13510289</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Preferred refresh rate</SettingNameInfo><SettingID>6600001</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Low Latency Mode</SettingNameInfo><SettingID>8102046</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Shader disk cache maximum size</SettingNameInfo><SettingID>11306135</SettingID><SettingValue>4294967295</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
     </Settings>
@@ -321,23 +409,35 @@ function Collect-Shader($ctx) {
 
 # ---------------------------------------------------------------------
 $PrewarmScript = {
-  param([string]$game, [string[]]$lines, [int]$delay)
+  param([string]$game, [string[]]$lines, [int]$delay, [string[]]$maps)
   if ($delay -gt 0) { Start-Sleep -Seconds $delay }
   try { [Diagnostics.Process]::GetCurrentProcess().PriorityClass = 'BelowNormal' } catch {}
   $buf = New-Object byte[] (4MB); $tot = [long]0
   $sw = [Diagnostics.Stopwatch]::StartNew()
   $jobs = New-Object System.Collections.Generic.List[object]
+  $full = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
   foreach ($sub in 'bin', 'csgo\bin', 'core') {
     $p = Join-Path $game $sub
-    if (Test-Path -LiteralPath $p) { foreach ($f in (Get-ChildItem -LiteralPath $p -Recurse -File)) { $jobs.Add(@($f.FullName, [long]0, [long]-1)) } }
+    if (Test-Path -LiteralPath $p) { foreach ($f in (Get-ChildItem -LiteralPath $p -Recurse -File)) { if ($full.Add($f.FullName)) { $jobs.Add(@($f.FullName, [long]0, [long]-1)) } } }
   }
-  foreach ($f in (Get-ChildItem -LiteralPath (Join-Path $game 'csgo') -Filter '*_dir.vpk' -File)) { $jobs.Add(@($f.FullName, [long]0, [long]-1)) }
+  foreach ($f in (Get-ChildItem -LiteralPath (Join-Path $game 'csgo') -Filter '*_dir.vpk' -File)) { if ($full.Add($f.FullName)) { $jobs.Add(@($f.FullName, [long]0, [long]-1)) } }
   foreach ($ln in $lines) {
     $parts = $ln -split "`t"; if ($parts.Count -lt 2) { continue }
     $fp = Join-Path $game $parts[0]
+    if ($full.Contains($fp)) { continue }   # bu fayl artiq tam oxunur
     foreach ($r in ($parts[1] -split ';')) { $se = $r -split '-'; if ($se.Count -eq 2) { $jobs.Add(@($fp, [long]$se[0], [long]$se[1])) } }
   }
+  # 2-ci merhele: menyudan sonra populyar xeriteler (xeriteye giris suretlenir)
+  $mapStart = $jobs.Count
+  foreach ($m in $maps) {
+    $mf = Join-Path $game ("csgo\maps\{0}.vpk" -f $m.Trim())
+    if ((Test-Path -LiteralPath $mf) -and $full.Add($mf)) { $jobs.Add(@($mf, [long]0, [long]-1)) }
+  }
+  $menuGB = 0.0
+  $ji = 0
   foreach ($j in $jobs) {
+    if ($ji -eq $mapStart) { $menuGB = $tot / 1GB }
+    $ji++
     try {
       $fs = [IO.File]::Open($j[0], 'Open', 'Read', 'ReadWrite')
       try {
@@ -346,7 +446,8 @@ $PrewarmScript = {
       } finally { $fs.Close() }
     } catch {}
   }
-  '{0:N2} GB {1:N0} saniyede oxundu (gozleme {2} san)' -f ($tot / 1GB), $sw.Elapsed.TotalSeconds, $delay
+  if ($ji -le $mapStart) { $menuGB = $tot / 1GB }
+  '{0:N2} GB {1:N0} saniyede oxundu (menyu {3:N2} GB + {4} xerite, gozleme {2} san)' -f ($tot / 1GB), $sw.Elapsed.TotalSeconds, $delay, $menuGB, ($jobs.Count - $mapStart)
 }
 function Get-PrewarmLines {
   $f = Join-Path $ShareDir 'cs2_prewarm_list.txt'
@@ -1031,10 +1132,11 @@ Log "Steam: $($SteamDirs -join ', ')"
 Log "CS2: $Game"
 
 $SI = Get-SysInfo
-Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz)
+Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz ({7}) | {4} ({5}) | RAM {8} GB | keyfiyyet: {9}" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz, $SI.ResSrc, $SI.RamGB, $SI.Tier)
 $VideoText = Get-VideoCfgText
 
 Apply-MachineTweaks
+Apply-DefenderExcl
 Write-Autoexec
 Apply-VideoCfg
 Apply-Nvidia
@@ -1045,7 +1147,10 @@ if ($PrewarmOn) {
   $lines = Get-PrewarmLines
   $delay = Get-Random -Minimum 0 -Maximum ([Math]::Max(1, $PrewarmDelay + 1))
   $PwPs = [PowerShell]::Create()
-  [void]$PwPs.AddScript($PrewarmScript).AddArgument($Game).AddArgument([string[]]$lines).AddArgument($delay)
+  $maps = @()
+  if ($PrewarmMaps -and $SI.RamGB -ge $MapsMinRamGB) { $maps = @($PrewarmMaps -split ',' | Where-Object { $_.Trim() }) }
+  elseif ($PrewarmMaps) { Log "Xeriteler evvelceden oxunmur: RAM $($SI.RamGB) GB < $MapsMinRamGB GB" }
+  [void]$PwPs.AddScript($PrewarmScript).AddArgument($Game).AddArgument([string[]]$lines).AddArgument($delay).AddArgument([string[]]$maps)
   $PwH = $PwPs.BeginInvoke()
   Log "Evvelceden oxuma basladi ($delay san sonra)"
 }

@@ -10,12 +10,13 @@ A single-file, silent Counter-Strike 2 optimizer for internet cafes, built and t
 
 Runs hidden in the background when the PC boots (nothing is shown on screen) and:
 
-- Detects the GPU, screen resolution and CPU type
-- Writes an optimized `cs2_video.txt` (read-only) for **every** Steam account on the PC, including accounts that log in later
-- Writes `autoexec.cfg`, applies Windows game settings (Game DVR off, Game Mode on, high-performance GPU, fullscreen optimizations off) and the right power plan for the CPU (dual-CCD X3D CPUs keep *Balanced*)
-- Applies NVIDIA driver settings silently if `nvidiaProfileInspector.exe` sits next to the script
+- Detects the GPU, the monitor's **native resolution and highest refresh rate** (from EDID, so a 60 Hz or non-native desktop no longer leaks into the game), CPU type and RAM
+- Picks a quality tier from the GPU (`high` / `mid` / `low`, see below) and writes `cs2_video.txt` for **every** Steam account on the PC, including accounts that log in later. The file is not read-only, so players can still change graphics in game
+- Writes `autoexec.cfg`, applies Windows game settings (Game DVR off, Game Mode on, high-performance GPU, fullscreen optimizations off) and the right power plan for the CPU (dual-CCD X3D CPUs keep *Balanced*; a missing *High performance* plan is recreated)
+- Adds a Windows Defender exclusion for the CS2 folder and `cs2.exe`, so files are not scanned again on every launch over the network
+- Applies NVIDIA driver settings silently if `nvidiaProfileInspector.exe` sits next to the script (max performance power mode, V-Sync off, highest refresh rate, unlimited shader cache)
 - **Shader cache sharing:** restores the NVIDIA shader cache from a server share before CS2 starts, and collects it back after CS2 closes (archived by GPU model + driver version)
-- **Pre-warm:** reads the exact parts of the CS2 files the game needs to reach the main menu into RAM, so the first launch is fast
+- **Pre-warm:** reads the exact parts of the CS2 files the game needs to reach the main menu into RAM, so the first launch is fast. On PCs with 16 GB+ RAM it then also reads the popular maps, so joining a match loads faster
 
 Players launch CS2 from Steam as usual. No menu entry is needed.
 
@@ -27,6 +28,16 @@ Players launch CS2 from Steam as usual. No menu entry is needed.
 | **With pre-warm** | **~29 s** | **~1.9 GB** |
 
 The pre-warm itself takes ~50–60 s at boot, running in the background before the player gets to the game.
+
+## Quality tiers
+
+| Tier | GPUs (auto) | MSAA | Shadows | Textures | Shader detail |
+|---|---|---|---|---|---|
+| `high` | RTX 4070+/5070+/3080+, RX 6800+/7800+/9070 | 4x | High | High | High |
+| `mid` | RTX 4060/4060 Ti/5060/5060 Ti/3060/3070/2070+, RX 6600–7700/9060, Arc A7/B7 | 4x | Medium | High | Low |
+| `low` | everything else | 2x | Medium | Medium | Low |
+
+All tiers use 16x anisotropic filtering, FSR off, ambient occlusion off, low particles and HDR *Performance*: the settings that cost the most FPS for the least visible difference. Set `$Quality` or `$MSAA` in the settings block to override. If `$MSAA = 0`, CMAA2 is turned on so edges are not jagged.
 
 ## Requirements
 
@@ -41,7 +52,7 @@ The pre-warm itself takes ~50–60 s at boot, running in the background before t
    ```powershell
    $ShareDir = '\\SERVER\share\cs2_shader'
    ```
-   Other settings (MSAA, Reflex, FPS limits, pre-warm delay, and so on) are in the same block.
+   Other settings (quality tier, MSAA, Reflex, FPS limits, pre-warm delay and maps, Defender exclusion, and so on) are in the same block.
 2. Put the script where the clients can reach it.
 3. Run it at boot, for example:
    - **Cloud Update:** Workstations → More → Set boot task → Add Task → *Run only*, Executable = path to `CS2_Optimizer.bat`, Delay = 30
@@ -72,12 +83,13 @@ Internet klublar üçün tək fayldan ibarət, səssiz işləyən CS2 optimizato
 ### Nə edir
 
 PC açılanda arxa planda gizli işə düşür (ekranda heç nə görünmür) və bunları edir:
-- Video kartı, ekranı və prosessoru tanıyır
-- PC-dəki **hər** Steam hesabına `cs2_video.txt` yazır, sonradan girən hesablar da daxil
+- Video kartı, monitorun öz ölçüsünü və ən yüksək Hz-ni, prosessoru və RAM-ı tanıyır
+- Video karta görə keyfiyyət seçir (high / mid / low) və PC-dəki **hər** Steam hesabına `cs2_video.txt` yazır, sonradan girən hesablar da daxil
+- Windows Defender CS2 fayllarını hər açılışda yoxlamasın deyə istisna əlavə edir
 - `autoexec.cfg` yazır, Windows oyun ayarlarını və prosessora uyğun enerji planını tətbiq edir
 - `nvidiaProfileInspector.exe` yanında olsa, NVIDIA ayarlarını səssiz tətbiq edir
 - Shader cache-i serverdən geri yükləyir, CS2 bağlananda serverə yığır
-- CS2-nin menyuya qədər oxuduğu hissələri RAM-a əvvəlcədən oxuyur: ilk açılış ~65 san → **~29 san**
+- CS2-nin menyuya qədər oxuduğu hissələri RAM-a əvvəlcədən oxuyur: ilk açılış ~65 san → **~29 san**. RAM 16 GB+ olanda populyar xəritələri də oxuyur
 
 Müştəri CS2-ni Steam-dən adi qaydada açır.
 
