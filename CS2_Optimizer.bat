@@ -42,7 +42,7 @@ param([string]$Mode = '')
 
 # ======================= AYARLAR =====================================
 $ShareDir     = '\\SERVER\share\cs2_shader'  # <-- DEYISIN: serverde paylasilan qovluq (shader arxivi, siyahi, jurnal)
-$MSAA         = 0      # 0 = max FPS | 2/4/8 = hamar kenarlar
+$MSAA         = 4      # 4 = hamar kenarlar (pikselsiz) | 0 = max FPS amma kenarlar pilleli
 $Reflex       = 1      # NVIDIA Reflex: 0 off | 1 on | 2 on+boost
 $Contrast     = 1      # Boost Player Contrast
 $FpsMax       = 0      # 0 = limitsiz
@@ -147,6 +147,8 @@ function Get-SysInfo {
   $disp = $gpus | Where-Object { $_.CurrentHorizontalResolution } | Select-Object -First 1
   $o.W = [int]$disp.CurrentHorizontalResolution; $o.H = [int]$disp.CurrentVerticalResolution
   if ($o.W -lt 800 -or $o.H -lt 600) { $o.W = 1920; $o.H = 1080 }
+  $o.Hz = [int]$disp.CurrentRefreshRate
+  if ($o.Hz -lt 50) { $o.Hz = 0 }
   $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
   $o.CpuName = ([string]$cpu.Name).Trim()
   $o.CpuType = 'OTHER'
@@ -169,8 +171,8 @@ function Get-VideoCfgText {
 	"setting.knowndevice"		"0"
 	"setting.defaultres"		"$($SI.W)"
 	"setting.defaultresheight"		"$($SI.H)"
-	"setting.refreshrate_numerator"		"0"
-	"setting.refreshrate_denominator"		"0"
+	"setting.refreshrate_numerator"		"$($SI.Hz)"
+	"setting.refreshrate_denominator"		"$(if ($SI.Hz -gt 0) { 1 } else { 0 })"
 	"setting.fullscreen"		"1"
 	"setting.coop_fullscreen"		"0"
 	"setting.nowindowborder"		"0"
@@ -181,15 +183,15 @@ function Get-VideoCfgText {
 	"setting.r_low_latency"		"$rf"
 	"setting.r_player_visibility_mode"		"$Contrast"
 	"setting.shaderquality"		"0"
-	"setting.r_texturefilteringquality"		"0"
+	"setting.r_texturefilteringquality"		"5"
 	"setting.msaa_samples"		"$MSAA"
 	"setting.r_csgo_cmaa_enable"		"0"
-	"setting.videocfg_shadow_quality"		"0"
+	"setting.videocfg_shadow_quality"		"2"
 	"setting.videocfg_dynamic_shadows"		"1"
-	"setting.videocfg_texture_detail"		"0"
+	"setting.videocfg_texture_detail"		"1"
 	"setting.videocfg_particle_detail"		"0"
 	"setting.videocfg_ao_detail"		"0"
-	"setting.videocfg_hdr_detail"		"3"
+	"setting.videocfg_hdr_detail"		"-1"
 	"setting.videocfg_fsr_detail"		"0"
 }
 "@
@@ -203,6 +205,14 @@ function Write-ReadOnly([string]$file, [string]$text) {
     $true
   } catch { $false }
 }
+function Write-CfgFile([string]$file, [string]$text) {
+  # yazilir, amma read-only DEYIL: musteri oyunda qrafikani ozu deyise bilsin
+  try {
+    if (Test-Path -LiteralPath $file) { (Get-Item -LiteralPath $file -Force).Attributes = 'Normal' }
+    [IO.File]::WriteAllText($file, ($text -replace "`r?`n", "`r`n"), (New-Object Text.ASCIIEncoding))
+    $true
+  } catch { $false }
+}
 $DoneUserdata = New-Object 'System.Collections.Generic.HashSet[string]'
 function Apply-VideoCfg {
   foreach ($s in $SteamDirs) {
@@ -213,7 +223,7 @@ function Apply-VideoCfg {
       if ($DoneUserdata.Contains($u.FullName)) { continue }
       $cfg = Join-Path $u.FullName '730\local\cfg'
       New-Item -ItemType Directory -Path $cfg -Force | Out-Null
-      if (Write-ReadOnly (Join-Path $cfg 'cs2_video.txt') $VideoText) { [void]$DoneUserdata.Add($u.FullName); Log "cs2_video.txt yazildi: $($u.Name)" }
+      if (Write-CfgFile (Join-Path $cfg 'cs2_video.txt') $VideoText) { [void]$DoneUserdata.Add($u.FullName); Log "cs2_video.txt yazildi: $($u.Name)" }
     }
   }
 }
@@ -264,7 +274,7 @@ function Apply-Nvidia {
     <Settings>
       <ProfileSetting><SettingNameInfo>Power management mode</SettingNameInfo><SettingID>274197361</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Vertical Sync</SettingNameInfo><SettingID>11041231</SettingID><SettingValue>138504007</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
-      <ProfileSetting><SettingNameInfo>Texture filtering - Quality</SettingNameInfo><SettingID>13510289</SettingID><SettingValue>20</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
+      <ProfileSetting><SettingNameInfo>Texture filtering - Quality</SettingNameInfo><SettingID>13510289</SettingID><SettingValue>0</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Low Latency Mode</SettingNameInfo><SettingID>8102046</SettingID><SettingValue>1</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
       <ProfileSetting><SettingNameInfo>Shader disk cache maximum size</SettingNameInfo><SettingID>11306135</SettingID><SettingValue>4294967295</SettingValue><ValueType>Dword</ValueType></ProfileSetting>
     </Settings>
@@ -1021,7 +1031,7 @@ Log "Steam: $($SteamDirs -join ', ')"
 Log "CS2: $Game"
 
 $SI = Get-SysInfo
-Log ("Sistem: {0} (driver {1}) | {2}x{3} | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType)
+Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz)
 $VideoText = Get-VideoCfgText
 
 Apply-MachineTweaks
