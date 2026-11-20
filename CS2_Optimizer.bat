@@ -46,7 +46,7 @@ param([string]$Mode = '')
 # ======================= AYARLAR =====================================
 $ShareDir     = '\\SERVER\share\cs2_shader'  # <-- DEYISIN: serverde paylasilan qovluq (shader arxivi, siyahi, jurnal)
 $Quality      = 'auto' # auto = video karta gore | high | mid | low  (asagidaki cedvele bax)
-#   high: 4x MSAA, 8x AF, kolge High,   tekstur Medium  (RTX 4070+/5070+/3080+, RX 7800+)
+#   high: 4x MSAA, 16x AF, kolge High,   tekstur Medium  (RTX 4070+/5070+/3080+, RX 7800+)
 #   mid : 2x MSAA, 4x AF, kolge Medium, tekstur Medium  (RTX 4060/3060/3070/5060, RX 6600-7700)
 #   low : CMAA2,   2x AF, kolge Medium, tekstur Low     (zeif kartlar)
 $Reflex       = 1      # NVIDIA Reflex: 0 off | 1 on | 2 on+boost
@@ -54,7 +54,7 @@ $Contrast     = 1      # Boost Player Contrast
 $FpsMax       = 0      # 0 = limitsiz
 $FpsMaxUI     = 200    # menyuda FPS limiti
 $PrewarmOn    = 1      # 1 = CS2 fayllarini RAM-a evvelceden oxu
-$PrewarmDelay = 90     # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
+$PrewarmDelay = 20     # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
 $ShaderOn     = 1      # 1 = shader cache geri yukle / yig
 $ShaderMaxMB  = 3000   # her kart ucun arxiv limiti (MB)
 # =====================================================================
@@ -172,7 +172,7 @@ function Get-VideoCfgText {
   $rf = $Reflex; if (-not $SI.Nvidia) { $rf = 0 }
   $q = $Quality; if ($q -notin 'high', 'mid', 'low') { $q = $SI.Tier }
   switch ($q) {
-    'high'  { $msaa = 4; $cmaa = 0; $af = 4; $sh = 2; $tx = 1 }
+    'high'  { $msaa = 4; $cmaa = 0; $af = 5; $sh = 2; $tx = 1 }
     'mid'   { $msaa = 2; $cmaa = 0; $af = 3; $sh = 1; $tx = 1 }
     default { $msaa = 0; $cmaa = 1; $af = 2; $sh = 1; $tx = 0 }
   }
