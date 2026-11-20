@@ -630,7 +630,7 @@ function Setup-Bot {
   if (-not $Self) { Write-Host 'XETA: fayl yolu tapilmadi' -ForegroundColor Red; return }
   $act = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ""' + $Self + '" bot"')
   $trg = New-ScheduledTaskTrigger -AtStartup
-  $pri = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+  $pri = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
   $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
   Register-ScheduledTask -TaskName 'CS2OptMasaBot' -Action $act -Trigger $trg -Principal $pri -Settings $set -Force | Out-Null
   Start-ScheduledTask -TaskName 'CS2OptMasaBot'
