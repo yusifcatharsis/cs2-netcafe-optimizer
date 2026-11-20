@@ -960,7 +960,7 @@ function Read-Snapshots([string]$bizDate) {
   foreach ($l in [IO.File]::ReadAllLines($f, [Text.Encoding]::UTF8)) {
     $p = $l -split ';'
     if ($p.Count -lt 6 -or $p[0] -eq 'vaxt') { continue }
-    $r += @{ T = [datetime]::ParseExact($p[0], 'yyyy-MM-dd HH:mm', $null); On = [int]$p[1]; Play = [int]$p[2]; Games = $p[3]; Ram = [double]$p[4]; Disk = [double]$p[5]; Free = $(if ($p.Count -ge 7) { $p[6] } else { '' }) }
+    $r += @{ T = [datetime]::ParseExact($p[0], 'yyyy-MM-dd HH:mm', $null); On = [int]$p[1]; Play = [int]$p[2]; Games = $p[3]; Ram = [double]($p[4] -replace ',', '.'); Disk = [double]($p[5] -replace ',', '.'); Free = $(if ($p.Count -ge 7) { $p[6] } else { '' }) }
   }
   $r
 }
