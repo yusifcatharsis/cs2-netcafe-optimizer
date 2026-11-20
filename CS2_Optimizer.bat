@@ -4,6 +4,7 @@ set "CS2OPT_SELF=%~f0"
 if /i "%~1"=="iz" goto :vis
 if /i "%~1"=="image" goto :vis
 if /i "%~1"=="test" goto :vis
+if /i "%~1"=="botsetup" goto :vis
 start "" /min powershell -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
 exit /b
 :vis
@@ -13,7 +14,7 @@ exit /b
 #>
 param([string]$Mode = '')
 # =====================================================================
-#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v3 (goruntu + FPS balansi)
+#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v4 (goruntu + FPS balansi + Telegram masa statusu)
 #  Muellif: yusifcatharsis (github.com/yusifcatharsis) | Telegram: @jeisterx
 #  Lisenziya: MIT | https://github.com/yusifcatharsis/cs2-netcafe-optimizer
 #
@@ -35,6 +36,9 @@ param([string]$Mode = '')
 #   CS2_Optimizer.bat iz    -> CS2 boyuk yenilemeden sonra oxuma siyahisini
 #                              yenileyir (Steam-e girin, sonra isledin)
 #   CS2_Optimizer.bat play  -> CS2-ni acir (menyu ucun, mecburi deyil)
+#   CS2_Optimizer.bat botsetup -> SERVERDE: Telegram botunu qurur. Telefondan
+#                              hansi masanin acik oldugunu ve hansi oyunda
+#                              oldugunu gorursunuz (/masalar)
 #   CS2_Optimizer.bat test  -> yoxlama: sistemi tanir, hansi ayarlarin yazilacagini
 #                              gosterir, hec neyi deyismir
 #   CS2_Optimizer.bat image -> YALNIZ SUPER REJIMDE, bir defe: VBS / Memory
@@ -57,11 +61,13 @@ $PrewarmOn    = 1      # 1 = CS2 fayllarini RAM-a evvelceden oxu
 $PrewarmDelay = 20     # 0..bu qeder saniye tesadufi gozle (83 PC eyni anda olmasin)
 $ShaderOn     = 1      # 1 = shader cache geri yukle / yig
 $ShaderMaxMB  = 3000   # her kart ucun arxiv limiti (MB)
+$ClubName     = 'NetCafe'               # Telegram botunda gorunen ad
+$ServerDir    = ''                      # serverde $ShareDir-in yerli yolu (bot ucun, mes. D:\share\cs2_shader)
 # =====================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
-$Visible = ($Mode -in 'iz', 'image', 'test')
+$Visible = ($Mode -in 'iz', 'image', 'test', 'botsetup')
 $Self = $env:CS2OPT_SELF
 $SelfDir = ''
 if ($Self) { $SelfDir = Split-Path -Parent $Self }
@@ -466,6 +472,171 @@ public static class CsTrace {
     try { Copy-Item $out (Join-Path $ShareDir 'cs2_prewarm_list.txt') -Force -ErrorAction Stop; Write-Host "HAZIRDIR. Yeni siyahi servere yazildi: $ShareDir\cs2_prewarm_list.txt" -ForegroundColor Green }
     catch { Write-Host "XETA: servere yazmaq olmadi: $($_.Exception.Message)" -ForegroundColor Red }
   } else { Write-Host 'XETA: siyahi bos cixdi, yeniden yoxlayin.' -ForegroundColor Red }
+}
+
+# ---------------------------------------------------------------------
+#  MASA STATUSU (telefon / Telegram ucun)
+# ---------------------------------------------------------------------
+$GameNames = @{
+  'cs2' = 'CS2'; 'valorant-win64-shipping' = 'Valorant'; 'r5apex' = 'Apex'; 'r5apex_dx12' = 'Apex'
+  'cod' = 'CoD'; 'cod24' = 'CoD'; 'cod25' = 'CoD'; 'blackops6' = 'CoD BO6'; 'blackops7' = 'CoD BO7'
+  'fortniteclient-win64-shipping' = 'Fortnite'; 'league of legends' = 'LoL'; 'dota2' = 'Dota 2'
+  'rainbowsix' = 'R6'; 'rainbowsix_be' = 'R6'; 'rainbowsix_vulkan' = 'R6'; 'tslgame' = 'PUBG'
+  'gta5' = 'GTA V'; 'gta5_enhanced' = 'GTA V'; 'fc25' = 'EA FC 25'; 'fc26' = 'EA FC 26'
+  'project8' = 'Deadlock'; 'deadlock' = 'Deadlock'; 'marvel-win64-shipping' = 'Marvel Rivals'
+  'overwatch' = 'Overwatch'; 'robloxplayerbeta' = 'Roblox'; 'javaw' = 'Minecraft'; 'warzone' = 'Warzone'
+  'pointblank' = 'Point Blank'; 'prime tanki' = 'Prime Tanki'; 'cybertankz' = 'CyberTankz'
+  'mortalshell' = 'Mortal Shell'; 'wardogs' = 'Steam Wardogs'; 'fragpunk' = 'FragPunk'
+  'steam' = 'Steam'; 'steamwebhelper' = 'Steam'; 'pncclient' = 'PanCafe'; 'explorer' = 'Masaustu'
+  'chrome' = 'Chrome'; 'msedge' = 'Edge'; 'discord' = 'Discord'; 'faceit' = 'FACEIT'
+  'battle.net' = 'Battle.net'; 'epicgameslauncher' = 'Epic'; 'riotclientux' = 'Riot'
+}
+$NotGames = @('steam', 'steamwebhelper', 'pncclient', 'explorer', 'chrome', 'msedge', 'discord', 'faceit', 'battle.net', 'epicgameslauncher', 'riotclientux')
+$GameKeys = @($GameNames.Keys | Where-Object { $NotGames -notcontains $_ })
+$StatusOk = $false
+function Init-Status {
+  try {
+    Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class CsUser {
+  [StructLayout(LayoutKind.Sequential)] struct LII { public uint cbSize; public uint dwTime; }
+  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LII p);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  public static uint IdleSeconds() { LII l = new LII(); l.cbSize = (uint)Marshal.SizeOf(l); if (!GetLastInputInfo(ref l)) return 0; return unchecked((uint)Environment.TickCount - l.dwTime) / 1000; }
+  public static uint ForegroundPid() { uint pid = 0; GetWindowThreadProcessId(GetForegroundWindow(), out pid); return pid; }
+}
+'@
+    $script:StatusOk = $true
+  } catch { Log "Status: baslatmaq olmadi ($($_.Exception.Message))" }
+}
+function Write-Status {
+  if (-not $StatusOk) { return }
+  try {
+    $idle = [CsUser]::IdleSeconds()
+    $fgName = ''; $fgDesc = ''
+    $fgPid = [CsUser]::ForegroundPid()
+    if ($fgPid) { $fp = Get-Process -Id $fgPid -ErrorAction SilentlyContinue; if ($fp) { $fgName = $fp.ProcessName.ToLowerInvariant(); $fgDesc = [string]$fp.Description } }
+    $running = @{}
+    foreach ($pr in (Get-Process)) { $running[$pr.ProcessName.ToLowerInvariant()] = 1 }
+    $game = ''
+    foreach ($k in $GameKeys) { if ($running.ContainsKey($k)) { $game = $GameNames[$k]; break } }
+    if ($GameNames.ContainsKey($fgName)) { $fg = $GameNames[$fgName] } elseif ($fgDesc) { $fg = $fgDesc } else { $fg = $fgName }
+    if (-not $game -and $fg -and $NotGames -notcontains $fgName -and $fgName -notin 'powershell', 'cmd', 'conhost', 'applicationframehost', 'shellexperiencehost', 'searchhost', 'lockapp', 'startmenuexperiencehost', 'textinputhost', '') { $game = $fg }
+    $line = '{0}|{1}|{2}|{3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ($game -replace '\|', ' '), ($fg -replace '\|', ' '), $idle
+    $d = Join-Path $ShareDir 'status'
+    if (-not $script:StatusDirOk) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $script:StatusDirOk = $true }
+    [IO.File]::WriteAllText((Join-Path $d "$env:COMPUTERNAME.txt"), $line, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
+# ---------------------------------------------------------------------
+#  TELEGRAM BOT (yalniz serverde: "CS2_Optimizer.bat botsetup")
+# ---------------------------------------------------------------------
+function Get-BotCfg {
+  $c = @{}
+  $f = Join-Path $WorkDir 'bot.txt'
+  if (Test-Path -LiteralPath $f) { foreach ($l in (Get-Content -LiteralPath $f)) { if ($l -match '^\s*(\w+)\s*=\s*(.*)$') { $c[$matches[1]] = $matches[2].Trim() } } }
+  $c
+}
+function Save-BotCfg($c) {
+  $f = Join-Path $WorkDir 'bot.txt'
+  $lines = foreach ($k in $c.Keys) { "$k=$($c[$k])" }
+  Set-Content -LiteralPath $f -Value $lines -Encoding ASCII
+  & icacls $f /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' 2>$null | Out-Null
+}
+function Tg([string]$method, $body) {
+  $json = $body | ConvertTo-Json -Depth 8 -Compress
+  Invoke-RestMethod -Uri ("https://api.telegram.org/bot{0}/{1}" -f $BotToken, $method) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 45
+}
+function Get-StatusDir {
+  if ($ServerDir -and (Test-Path -LiteralPath $ServerDir)) { return (Join-Path $ServerDir 'status') }
+  Join-Path $ShareDir 'status'
+}
+function Get-MasaReport {
+  $sd = Get-StatusDir
+  $now = Get-Date
+  $rows = New-Object System.Collections.Generic.List[string]
+  $off = New-Object System.Collections.Generic.List[string]
+  $on = 0; $play = 0
+  $files = @(Get-ChildItem -LiteralPath $sd -Filter '*.txt' -File -ErrorAction SilentlyContinue | Sort-Object { [regex]::Replace($_.BaseName, '\d+', { param($m) $m.Value.PadLeft(4, '0') }) })
+  foreach ($f in $files) {
+    $pc = $f.BaseName
+    if (($now - $f.LastWriteTime).TotalSeconds -gt 120) { $off.Add($pc); continue }
+    $on++
+    $p = ([IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)) -split '\|'
+    $game = ''; $fg = ''; $idle = 0
+    if ($p.Count -ge 4) { $game = $p[1]; $fg = $p[2]; $idle = [int]$p[3] }
+    if ($game) { $play++; $st = $game }
+    elseif ($fg -eq 'PanCafe') { $st = 'bos (PanCafe ekrani)' }
+    elseif ($fg) { $st = $fg } else { $st = 'acik' }
+    if (-not $game -and $idle -ge 300) { $st += (' - {0} dq toxunulmur' -f [int]($idle / 60)) }
+    $rows.Add(('{0,-7} {1}' -f $pc, $st))
+  }
+  $esc = { param($s) ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;') }
+  $t = "<b>$(& $esc $ClubName)</b>  $(Get-Date -Format 'HH:mm')`n"
+  $t += "Acik: <b>$on</b>  |  Oyunda: <b>$play</b>  |  Sonuk: <b>$($off.Count)</b>`n"
+  if ($rows.Count) { $t += '<pre>' + (& $esc ($rows -join "`n")) + '</pre>' } else { $t += "`nHec bir masa melumat gondermir." }
+  if ($off.Count) { $t += "`nSonuk: " + (& $esc ($off -join ', ')) }
+  if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
+  $t
+}
+function Run-Bot {
+  $LogFile = Join-Path $WorkDir 'bot_log.txt'
+  $m = New-Object System.Threading.Mutex($false, 'Global\cs2opt_bot')
+  $got = $false; try { $got = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
+  if (-not $got) { return }
+  Set-Content -LiteralPath $LogFile -Value ("=== Masa bot  {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  $cfg = Get-BotCfg
+  $script:BotToken = $cfg['token']
+  if (-not $BotToken) { Log 'XETA: token yoxdur. Evvelce: CS2_Optimizer.bat botsetup'; return }
+  Log "Status qovlugu: $(Get-StatusDir)"
+  $kb = @{ keyboard = @(, @(@{ text = 'Masalar' })); resize_keyboard = $true; is_persistent = $true }
+  $offset = 0
+  try { $r = Tg 'getUpdates' @{ offset = -1; timeout = 0 }; if ($r.result) { $offset = [long]$r.result[-1].update_id + 1 } } catch {}
+  Log 'Bot basladi'
+  while ($true) {
+    try { $r = Tg 'getUpdates' @{ offset = $offset; timeout = 25; allowed_updates = @('message') } }
+    catch { Log "Telegram xetasi: $($_.Exception.Message)"; Start-Sleep -Seconds 15; continue }
+    foreach ($u in @($r.result)) {
+      if (-not $u) { continue }
+      $offset = [long]$u.update_id + 1
+      $msg = $u.message; if (-not $msg) { continue }
+      $chat = [string]$msg.chat.id; $txt = ([string]$msg.text).Trim()
+      if (-not $cfg['owner']) {
+        if ($txt -like '/start*') { $cfg['owner'] = $chat; Save-BotCfg $cfg; Log "Sahib qeyd olundu: $chat" } else { continue }
+      }
+      try {
+        if ($chat -ne $cfg['owner']) { Tg 'sendMessage' @{ chat_id = $chat; text = 'Bu bot sexsidir.' } | Out-Null; Log "Icazesiz cehd: $chat"; continue }
+        if ($txt -match '^(/start|/masalar|masalar|/m)\b' -or $txt -eq 'Masalar') {
+          Tg 'sendMessage' @{ chat_id = $chat; text = (Get-MasaReport); parse_mode = 'HTML'; reply_markup = $kb } | Out-Null
+        } else {
+          Tg 'sendMessage' @{ chat_id = $chat; text = 'Masalari gormek ucun asagidaki "Masalar" duymesine basin ve ya /masalar yazin.'; reply_markup = $kb } | Out-Null
+        }
+      } catch { Log "Gondermek olmadi: $($_.Exception.Message)" }
+    }
+  }
+}
+function Setup-Bot {
+  Write-Host '=== Telegram masa botunun qurasdirilmasi (SERVERDE isledin) ===' -ForegroundColor Cyan
+  if (-not $IsAdmin) { Write-Host 'XETA: sag klik > Yonetici olarak calistir.' -ForegroundColor Red; return }
+  try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+  Write-Host '1) Telegramda @BotFather-e yazin: /newbot  -> ad verin -> TOKEN-i kopyalayin.'
+  $tok = (Read-Host '2) Token-i bura yapisdirin ve Enter basin').Trim()
+  if ($tok -notmatch '^\d+:[\w-]{30,}$') { Write-Host 'XETA: token formati sehvdir.' -ForegroundColor Red; return }
+  try { $me = Invoke-RestMethod -Uri "https://api.telegram.org/bot$tok/getMe" -TimeoutSec 20 } catch { Write-Host "XETA: Telegram-a qosulmaq olmadi: $($_.Exception.Message)" -ForegroundColor Red; return }
+  Save-BotCfg @{ token = $tok }
+  if (-not $Self) { Write-Host 'XETA: fayl yolu tapilmadi' -ForegroundColor Red; return }
+  $act = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument ('/c ""' + $Self + '" bot"')
+  $trg = New-ScheduledTaskTrigger -AtStartup
+  $pri = New-ScheduledTaskPrincipal -UserId 'S-1-5-18' -LogonType ServiceAccount -RunLevel Highest
+  $set = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  Register-ScheduledTask -TaskName 'CS2OptMasaBot' -Action $act -Trigger $trg -Principal $pri -Settings $set -Force | Out-Null
+  Start-ScheduledTask -TaskName 'CS2OptMasaBot'
+  Write-Host ''
+  Write-Host ("HAZIRDIR. Telefonda Telegram-da @{0} botunu acin ve /start yazin." -f $me.result.username) -ForegroundColor Green
+  Write-Host 'Ilk /start yazan hesab botun sahibi olur, basqalari gore bilmez.'
 }
 
 function Start-Daemon {
@@ -1045,6 +1216,8 @@ if ($Mode -eq 'image') {
   return
 }
 
+if ($Mode -eq 'botsetup') { Setup-Bot; return }
+if ($Mode -eq 'bot') { Run-Bot; return }
 if ($Mode -eq 'play') {
   $m = New-Object System.Threading.Mutex($false, 'Global\cs2opt_daemon')
   $free = $false; try { $free = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $free = $true } catch { $free = $false }
@@ -1059,7 +1232,7 @@ $Mutex = New-Object System.Threading.Mutex($false, 'Global\cs2opt_daemon')
 $got = $false; try { $got = $Mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
 if (-not $got) { return }
 
-Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v3  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v4  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
 Log ("Istifadeci: {0}  admin={1}  system={2}" -f $Me.Name, $IsAdmin, $IsSystem)
 
 # Oyun diski gec qosula biler: 5 deqiqeye qeder gozle
@@ -1095,6 +1268,8 @@ if ($PrewarmOn) {
 $DoneCtx = New-Object 'System.Collections.Generic.HashSet[string]'
 $Cs2Running = $false
 $tick = 0
+Init-Status
+Write-Status
 Push-Log
 while ($true) {
   foreach ($ctx in (Get-UserContexts)) {
@@ -1116,5 +1291,6 @@ while ($true) {
   }
   Start-Sleep -Seconds 3
   $tick++
+  if ($tick % 10 -eq 0) { Write-Status }
   if ($tick % 200 -eq 0) { $SteamDirs = @(Find-SteamDirs) }
 }
