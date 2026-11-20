@@ -27,6 +27,8 @@ Every PC also reports every 30 s which game is running (or that the PanCafe scre
 2. On the **server**, run as admin: `CS2_Optimizer.bat botsetup` and paste the token. It registers a startup task (`CS2OptMasaBot`).
 3. Open your bot on the phone and send `/start`. The first account that does this becomes the owner; nobody else can read it.
 4. Tap **Masalar** (or send `/masalar`) any time to get: open PCs, which game each one is in, idle PCs and PCs that are off.
+5. **Problem diagnostics:** every PC keeps the last 2 minutes of disk latency (reads from the diskless server), ping to the server, CPU/RAM, GPU temperature/VRAM and Steam downloads. When a game freezes (not responding >20 s), crashes (with the faulting module), the GPU driver resets, a WHEA hardware error or a monitor disconnect happens, or a PC dies in the middle of a game, the bot sends an alert with a likely cause (server/disk, network, NVIDIA driver, overheating, RAM, Steam download...) and tells you if several PCs had a problem at the same moment (= server/network).
+6. **Reports:** daily report at `$ReportHour` (04:00 by default) with occupancy by hour, most played games, problems by cause/PC/hour and server peaks; buttons **Problemler**, **Hesabat**, **Heftelik** and `/pc PC-07`. History is kept as CSV in `<share>\tarix\` and full incident files in `<share>\hadise\<date>\`.
 
 Set `$ClubName` and `$ServerDir` (the server's local path of `$ShareDir`) at the top of the script.
 
@@ -65,6 +67,7 @@ The pre-warm itself takes ~50–60 s at boot, running in the background before t
 |---|---|
 | `CS2_Optimizer.bat iz` | Re-measures which file parts CS2 reads up to the main menu (ETW trace) and saves a new pre-warm list to the share. **Run this after big CS2 updates.** Reboot first, log in to Steam, then run it and press Enter when the main menu appears. |
 | `CS2_Optimizer.bat botsetup` | **Server only.** Sets up the Telegram bot that shows which PCs are on and which game they are in. |
+| `CS2_Optimizer.bat diagtest` | Collects diagnostics for 12 s and sends a TEST alert through the bot (end-to-end check). |
 | `CS2_Optimizer.bat test` | Dry run: shows the detected hardware, chosen graphics profile and the settings it would write. Changes nothing. |
 | `CS2_Optimizer.bat play` | Starts the background service if it is not running, then launches CS2 (optional, for club menus). |
 | `CS2_Optimizer.bat image` | **Super mode / image editing only.** Turns off VBS / Memory Integrity. This gives more FPS but **weakens Windows security**, so use it at your own risk. |

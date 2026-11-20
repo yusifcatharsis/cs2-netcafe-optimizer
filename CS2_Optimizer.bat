@@ -5,16 +5,17 @@ if /i "%~1"=="iz" goto :vis
 if /i "%~1"=="image" goto :vis
 if /i "%~1"=="test" goto :vis
 if /i "%~1"=="botsetup" goto :vis
-start "" /min powershell -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
+if /i "%~1"=="diagtest" goto :vis
+start "" /min powershell -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command ". ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
 exit /b
 :vis
-powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
+powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF))) -Mode '%~1'"
 pause
 exit /b
 #>
 param([string]$Mode = '')
 # =====================================================================
-#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v4.1 (goruntu + FPS balansi + Telegram masa statusu)
+#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v5 (goruntu + FPS + Telegram: masalar, problem diaqnostikasi, hesabatlar)
 #  Muellif: yusifcatharsis (github.com/yusifcatharsis) | Telegram: @jeisterx
 #  Lisenziya: MIT | https://github.com/yusifcatharsis/cs2-netcafe-optimizer
 #
@@ -39,6 +40,7 @@ param([string]$Mode = '')
 #   CS2_Optimizer.bat botsetup -> SERVERDE: Telegram botunu qurur. Telefondan
 #                              hansi masanin acik oldugunu ve hansi oyunda
 #                              oldugunu gorursunuz (/masalar)
+#   CS2_Optimizer.bat diagtest -> diaqnostikani yoxlayir, Telegram-a test xeberdarligi gonderir
 #   CS2_Optimizer.bat test  -> yoxlama: sistemi tanir, hansi ayarlarin yazilacagini
 #                              gosterir, hec neyi deyismir
 #   CS2_Optimizer.bat image -> YALNIZ SUPER REJIMDE, bir defe: VBS / Memory
@@ -63,11 +65,12 @@ $ShaderOn     = 1      # 1 = shader cache geri yukle / yig
 $ShaderMaxMB  = 3000   # her kart ucun arxiv limiti (MB)
 $ClubName     = 'NetCafe'               # Telegram botunda gorunen ad
 $ServerDir    = ''                      # serverde $ShareDir-in yerli yolu (bot ucun, mes. D:\share\cs2_shader)
+$ReportHour   = 4                       # gun sonu hesabati saati (04:00)
 # =====================================================================
 
 $ErrorActionPreference = 'SilentlyContinue'
 $ProgressPreference = 'SilentlyContinue'
-$Visible = ($Mode -in 'iz', 'image', 'test', 'botsetup')
+$Visible = ($Mode -in 'iz', 'image', 'test', 'botsetup', 'diagtest')
 $Self = $env:CS2OPT_SELF
 $SelfDir = ''
 if ($Self) { $SelfDir = Split-Path -Parent $Self }
@@ -493,6 +496,7 @@ $GameNames = @{
   'chrome' = 'Chrome'; 'msedge' = 'Edge'; 'discord' = 'Discord'; 'faceit' = 'FACEIT'
   'battle.net' = 'Battle.net'; 'epicgameslauncher' = 'Epic'; 'riotclientux' = 'Riot'
 }
+$WarnIcon = [char]::ConvertFromUtf32(0x26A0); $ErrIcon = [char]::ConvertFromUtf32(0x274C); $OkIcon = [char]::ConvertFromUtf32(0x2705)
 $NotGames = @('steam', 'steamwebhelper', 'pncclient', 'explorer', 'chrome', 'msedge', 'discord', 'faceit', 'battle.net', 'epicgameslauncher', 'riotclientux')
 $GameKeys = @($GameNames.Keys | Where-Object { $NotGames -notcontains $_ })
 $StatusOk = $false
@@ -519,16 +523,209 @@ function Write-Status {
     $fgName = ''; $fgDesc = ''
     $fgPid = [CsUser]::ForegroundPid()
     if ($fgPid) { $fp = Get-Process -Id $fgPid -ErrorAction SilentlyContinue; if ($fp) { $fgName = $fp.ProcessName.ToLowerInvariant(); $fgDesc = [string]$fp.Description } }
-    $running = @{}
-    foreach ($pr in (Get-Process)) { $running[$pr.ProcessName.ToLowerInvariant()] = 1 }
+    $ls = $LastSample
     $game = ''
-    foreach ($k in $GameKeys) { if ($running.ContainsKey($k)) { $game = $GameNames[$k]; break } }
+    if ($ls) { $game = [string]$ls.Game } else { $gp = Get-GameProc; if ($gp) { $game = $gp[0] } }
     if ($GameNames.ContainsKey($fgName)) { $fg = $GameNames[$fgName] } elseif ($fgDesc) { $fg = $fgDesc } else { $fg = $fgName }
     if (-not $game -and $fg -and $NotGames -notcontains $fgName -and $fgName -notin 'powershell', 'cmd', 'conhost', 'applicationframehost', 'shellexperiencehost', 'searchhost', 'lockapp', 'startmenuexperiencehost', 'textinputhost', '') { $game = $fg }
-    $line = '{0}|{1}|{2}|{3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ($game -replace '\|', ' '), ($fg -replace '\|', ' '), $idle
+    if ($ShuttingDown) { $game = ''; $fg = 'SONDURULUR' }
+    $m = @(-1, -1, -1, -1, -1, -1, -1, 0, 0)
+    if ($ls) { $m = @($ls.DiskMs, $ls.Ping, $ls.Cpu, $ls.Ram, $ls.GpuT, $ls.GpuU, $ls.VramPct, [int][bool]$ls.SteamDl, [int](-not $ls.Resp)) }
+    $line = (@((Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), ($game -replace '\|', ' '), ($fg -replace '\|', ' '), $idle) + $m) -join '|'
     $d = Join-Path $ShareDir 'status'
-    if (-not $script:StatusDirOk) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $script:StatusDirOk = $true }
+    if (-not $StatusDirOk) { New-Item -ItemType Directory -Path $d -Force | Out-Null; $script:StatusDirOk = $true }
     [IO.File]::WriteAllText((Join-Path $d "$env:COMPUTERNAME.txt"), $line, (New-Object Text.UTF8Encoding($false)))
+  } catch {}
+}
+
+# ---------------------------------------------------------------------
+#  DIAQNOSTIKA (her masada): son 2 deqiqenin gostericileri + hadiseler
+# ---------------------------------------------------------------------
+$Diag = New-Object System.Collections.Generic.List[object]
+$DiskPrev = $null
+$LastSample = $null
+$GpuLast = @{ T = -1; U = -1; MU = -1; MT = -1 }
+$NvSmi = $null
+foreach ($c in @("$env:SystemRoot\System32\nvidia-smi.exe", "$env:ProgramFiles\NVIDIA Corporation\NVSMI\nvidia-smi.exe")) { if (Test-Path -LiteralPath $c) { $NvSmi = $c; break } }
+$PingObj = New-Object System.Net.NetworkInformation.Ping
+$ServerIp = ''
+try { $ServerIp = ([System.Uri]$ShareDir).Host } catch {}
+$HangTicks = 0; $HangOpen = $false; $HangGame = ''
+$IncLast = @{}
+$EvSince = Get-Date
+$MonCount = -1
+$SampleNo = 0
+$SteamDlNow = $false
+$ShuttingDown = $false
+$ShutChk = Get-Date
+$VbsOn = '?'
+
+function Get-GameProc {
+  $map = @{}
+  foreach ($p in (Get-Process -ErrorAction SilentlyContinue)) { $n = $p.ProcessName.ToLowerInvariant(); if (-not $map.ContainsKey($n)) { $map[$n] = $p } }
+  foreach ($k in $GameKeys) { if ($map.ContainsKey($k)) { return @($GameNames[$k], $map[$k]) } }
+  $null
+}
+function Check-Shutdown {
+  # Windows-un normal sondurulmesini (PanCafe / istifadeci) tutur ki, bot "qefil sondu" demesin
+  try {
+    $e = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 1074; StartTime = $ShutChk } -MaxEvents 1 -ErrorAction Stop
+    if ($e) { $script:ShuttingDown = $true; Write-Status }
+  } catch {}
+  $script:ShutChk = Get-Date
+}
+function Test-SteamDownloading {
+  foreach ($s in $SteamDirs) {
+    $dl = Join-Path $s 'steamapps\downloading'
+    if (Test-Path -LiteralPath $dl) {
+      $recent = Get-ChildItem -LiteralPath $dl -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-2) } | Select-Object -First 1
+      if ($recent) { return $true }
+    }
+  }
+  $false
+}
+function Sample-Diag {
+  $s = @{ T = (Get-Date); DiskMs = -1; DiskMBs = -1; Cpu = -1; Ram = -1; Ping = -1; Game = ''; Resp = $true; GpuT = -1; GpuU = -1; VramPct = -1 }
+  try {
+    $d = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='_Total'" -ErrorAction Stop
+    if ($script:DiskPrev) {
+      $p = $script:DiskPrev
+      $db = [double]$d.AvgDisksecPerRead_Base - [double]$p.AvgDisksecPerRead_Base
+      if ($db -gt 0) { $s.DiskMs = [math]::Round((([double]$d.AvgDisksecPerRead - [double]$p.AvgDisksecPerRead) / [double]$d.Frequency_PerfTime) / $db * 1000, 1) } else { $s.DiskMs = 0 }
+      $dt = ([double]$d.Timestamp_PerfTime - [double]$p.Timestamp_PerfTime) / [double]$d.Frequency_PerfTime
+      if ($dt -gt 0) { $s.DiskMBs = [math]::Round(([double]$d.DiskReadBytesPersec - [double]$p.DiskReadBytesPersec) / $dt / 1MB, 1) }
+    }
+    $script:DiskPrev = $d
+  } catch {}
+  try { $s.Cpu = [int](Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'" -ErrorAction Stop).PercentProcessorTime } catch {}
+  try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop; $s.Ram = [int](100 - ([double]$os.FreePhysicalMemory / [double]$os.TotalVisibleMemorySize * 100)) } catch {}
+  if ($ServerIp) { try { $r = $PingObj.Send($ServerIp, 1000); if ($r.Status -eq 'Success') { $s.Ping = [int]$r.RoundtripTime } } catch {} }
+  $gp = Get-GameProc
+  if ($gp) { $s.Game = $gp[0]; try { $gp[1].Refresh(); $s.Resp = [bool]$gp[1].Responding } catch {} }
+  $script:SampleNo++
+  if ($NvSmi -and ($script:SampleNo % 3 -eq 1)) {
+    try {
+      $o = (& $NvSmi --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1) -split ','
+      if ($o.Count -ge 4) { $script:GpuLast = @{ T = [int]$o[0]; U = [int]$o[1]; MU = [int]$o[2]; MT = [int]$o[3] } }
+    } catch {}
+  }
+  $s.GpuT = $GpuLast.T; $s.GpuU = $GpuLast.U
+  if ($GpuLast.MT -gt 0) { $s.VramPct = [int]($GpuLast.MU / $GpuLast.MT * 100) }
+  if ($script:SampleNo % 20 -eq 1) { $script:SteamDlNow = Test-SteamDownloading }
+  $s.SteamDl = $SteamDlNow
+  $Diag.Add($s)
+  while ($Diag.Count -gt 40) { $Diag.RemoveAt(0) }
+  $script:LastSample = $s
+  # --- donma (oyun cavab vermir) ---
+  if ($s.Game -and -not $s.Resp) {
+    $script:HangTicks++
+    if ($HangTicks -eq 7) { $script:HangOpen = $true; $script:HangGame = $s.Game; New-Incident 'donma' $s.Game ('{0} ~20 saniyedir cavab vermir' -f $s.Game) '' }
+  } else {
+    if ($HangOpen) { New-Incident 'donma_son' $HangGame ('{0} {1} saniye sonra berpa olundu (ve ya baglandi)' -f $HangGame, ($HangTicks * 3)) '' }
+    $script:HangTicks = 0; $script:HangOpen = $false
+  }
+}
+function Get-DiagStats([int]$sec) {
+  $now = Get-Date
+  $w = @($Diag | Where-Object { ($now - $_.T).TotalSeconds -le $sec })
+  $st = @{ N = $w.Count; DiskMax = -1; DiskAvg = -1; DiskMBMax = -1; PingMax = -1; Loss = 0; CpuMax = -1; RamMax = -1; GpuT = $GpuLast.T; GpuU = $GpuLast.U; VramPct = -1; SteamDl = $SteamDlNow }
+  if ($GpuLast.MT -gt 0) { $st.VramPct = [int]($GpuLast.MU / $GpuLast.MT * 100) }
+  if ($w.Count) {
+    $dk = @($w | Where-Object { $_.DiskMs -ge 0 } | ForEach-Object { $_.DiskMs })
+    if ($dk.Count) { $st.DiskMax = ($dk | Measure-Object -Maximum).Maximum; $st.DiskAvg = [math]::Round(($dk | Measure-Object -Average).Average, 1) }
+    $mb = @($w | Where-Object { $_.DiskMBs -ge 0 } | ForEach-Object { $_.DiskMBs }); if ($mb.Count) { $st.DiskMBMax = ($mb | Measure-Object -Maximum).Maximum }
+    $pg = @($w | ForEach-Object { $_.Ping })
+    $st.Loss = @($pg | Where-Object { $_ -lt 0 }).Count
+    $ok = @($pg | Where-Object { $_ -ge 0 }); if ($ok.Count) { $st.PingMax = ($ok | Measure-Object -Maximum).Maximum }
+    $st.CpuMax = (@($w | ForEach-Object { $_.Cpu }) | Measure-Object -Maximum).Maximum
+    $st.RamMax = (@($w | ForEach-Object { $_.Ram }) | Measure-Object -Maximum).Maximum
+  }
+  $st
+}
+function Get-Cause([string]$type, [string]$module, $st) {
+  if ($type -eq 'hardware') { return 'HARDWARE: RAM/CPU stabil deyil (XMP/EXPO, BIOS, overclock)' }
+  if ($type -eq 'driver' -or $module -match '^(nvwgf|nvlddmkm|nvoglv|nvd3dum|nvgpucomp|nvapi)') { return 'NVIDIA DRIVER' }
+  if ($type -eq 'monitor') { return 'MONITOR / KABEL (DisplayPort)' }
+  if ($st.GpuT -ge 85) { return ('GPU QIZMA ({0} C)' -f $st.GpuT) }
+  if ($st.VramPct -ge 97) { return ('VIDEO YADDAS DOLUB (VRAM {0}%)' -f $st.VramPct) }
+  if ($st.RamMax -ge 95) { return ('RAM DOLUB ({0}%)' -f $st.RamMax) }
+  if ($st.DiskMax -ge 100) { return ('SERVER / DISK GECIKMESI ({0} ms)' -f $st.DiskMax) }
+  if ($st.Loss -gt 0 -or $st.PingMax -ge 20) { return ('SEBEKE (ping {0} ms, itki {1})' -f $st.PingMax, $st.Loss) }
+  if ($st.SteamDl) { return 'STEAM YUKLEMESI (arxa planda)' }
+  if ($st.CpuMax -ge 95) { return ('CPU YUKU ({0}%)' -f $st.CpuMax) }
+  if ($module -match '^(d3d11|dxgi|d3d12)') { return 'DIRECTX / VIDEO DRIVER' }
+  if ($type -eq 'cokme') { return 'OYUNUN OZ XETASI' }
+  'MELUM DEYIL'
+}
+function New-Incident([string]$type, [string]$game, [string]$detail, [string]$module) {
+  try {
+    if ($IncLast.ContainsKey($type) -and ((Get-Date) - $IncLast[$type]).TotalMinutes -lt 5) { return }
+    $IncLast[$type] = Get-Date
+    $st = Get-DiagStats 60
+    $cause = ''
+    if ($type -ne 'donma_son' -and $type -ne 'test') { $cause = Get-Cause $type $module $st }
+    if ($type -eq 'test') { $cause = 'TEST' }
+    $sum = 'Disk {0} ms (orta {1}) | Ping {2} ms itki {3} | CPU {4}% | RAM {5}% | GPU {6} C {7}% VRAM {8}%' -f $st.DiskMax, $st.DiskAvg, $st.PingMax, $st.Loss, $st.CpuMax, $st.RamMax, $st.GpuT, $st.GpuU, $st.VramPct
+    if ($st.SteamDl) { $sum += ' | Steam yukleyir' }
+    $top = ''
+    try {
+      $pp = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction Stop | Where-Object { $_.Name -notin '_Total', 'Idle' } | Sort-Object PercentProcessorTime -Descending | Select-Object -First 5
+      $top = ($pp | ForEach-Object { '{0} {1}% {2}MB' -f $_.Name, $_.PercentProcessorTime, [int]($_.WorkingSetPrivate / 1MB) }) -join ', '
+    } catch {}
+    $up = ''
+    try { $up = [int]((Get-Date) - (Get-CimInstance Win32_OperatingSystem).LastBootUpTime).TotalMinutes } catch {}
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("TYPE=$type"); $lines.Add("PC=$env:COMPUTERNAME"); $lines.Add(('TIME={0}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')))
+    $lines.Add("GAME=$game"); $lines.Add("CAUSE=$cause"); $lines.Add("MODULE=$module")
+    $lines.Add(('DETAIL={0}' -f ($detail -replace "[`r`n]+", ' ')))
+    $lines.Add("SUMMARY=$sum")
+    $lines.Add("TOP=$top")
+    $lines.Add(('INFO=GPU {0} drv {1} | PC acilib {2} dq evvel | Qrafika {3} | VBS {4}' -f $SI.GpuName, $SI.Driver, $up, $QualityUsed, $VbsOn))
+    $lines.Add('')
+    $lines.Add('--- son 60 saniye (3 san addim): vaxt disk_ms disk_MBs ping cpu ram gpuT oyun cavab ---')
+    foreach ($x in @($Diag | Where-Object { ((Get-Date) - $_.T).TotalSeconds -le 60 })) {
+      $lines.Add(('{0:HH:mm:ss} {1} {2} {3} {4} {5} {6} {7} {8}' -f $x.T, $x.DiskMs, $x.DiskMBs, $x.Ping, $x.Cpu, $x.Ram, $x.GpuT, $x.Game, $x.Resp))
+    }
+    $d = Join-Path $ShareDir 'hadise\new'
+    New-Item -ItemType Directory -Path $d -Force | Out-Null
+    $f = Join-Path $d ('{0}_{1}_{2}.txt' -f (Get-Date -Format 'yyyyMMdd_HHmmss'), $env:COMPUTERNAME, $type)
+    [IO.File]::WriteAllLines($f, $lines, (New-Object Text.UTF8Encoding($false)))
+    Log ("HADISE: {0} {1} | {2} | {3}" -f $type, $game, $cause, $sum)
+  } catch { Log "Hadise yazilmadi: $($_.Exception.Message)" }
+}
+function Check-Events {
+  $since = $script:EvSince
+  $script:EvSince = Get-Date
+  $ev = @()
+  try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000, 1002; StartTime = $since } -ErrorAction Stop) } catch {}
+  foreach ($e in $ev) {
+    try {
+      $app = [string]$e.Properties[0].Value
+      $an = ($app -replace '\.exe$', '').ToLowerInvariant()
+      $path = ''; try { $path = [string]$e.Properties[10].Value } catch {}
+      $isGame = ($GameNames.ContainsKey($an) -and $NotGames -notcontains $an) -or ($path -match 'steamapps|Riot Games|Epic Games')
+      if (-not $isGame) { continue }
+      $gname = $app; if ($GameNames.ContainsKey($an)) { $gname = $GameNames[$an] }
+      if ($e.Id -eq 1000) {
+        $mod = [string]$e.Properties[3].Value; $code = [string]$e.Properties[6].Value
+        New-Incident 'cokme' $gname ('{0} cokdu. Modul: {1}, kod: {2}' -f $gname, $mod, $code) $mod
+      } else {
+        New-Incident 'donma_baglandi' $gname ('{0} donub qaldi ve Windows terefinden baglandi' -f $gname) ''
+      }
+    } catch {}
+  }
+  $sys = @()
+  try { $sys = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $since; Level = 1, 2, 3 } -ErrorAction Stop | Where-Object { $_.Id -eq 4101 -or $_.ProviderName -match 'nvlddmkm|WHEA' }) } catch {}
+  foreach ($e in $sys) {
+    $msg = ([string]$e.Message -replace "[`r`n]+", ' '); if ($msg.Length -gt 200) { $msg = $msg.Substring(0, 200) }
+    $g = ''; if ($LastSample) { $g = $LastSample.Game }
+    if ($e.ProviderName -match 'WHEA') { New-Incident 'hardware' $g ('WHEA {0}: {1}' -f $e.Id, $msg) '' }
+    else { New-Incident 'driver' $g ('{0} {1}: {2}' -f $e.ProviderName, $e.Id, $msg) 'nvlddmkm' }
+  }
+  try {
+    $mc = @(Get-CimInstance Win32_PnPEntity -Filter "PNPClass='Monitor' AND Status='OK'" -ErrorAction Stop).Count
+    if ($script:MonCount -ge 0 -and $mc -lt $MonCount) { $g = ''; if ($LastSample) { $g = $LastSample.Game }; New-Incident 'monitor' $g ('Monitor ayrildi ({0} -> {1})' -f $MonCount, $mc) '' }
+    $script:MonCount = $mc
   } catch {}
 }
 
@@ -551,75 +748,353 @@ function Tg([string]$method, $body) {
   $json = $body | ConvertTo-Json -Depth 8 -Compress
   Invoke-RestMethod -Uri ("https://api.telegram.org/bot{0}/{1}" -f $BotToken, $method) -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) -TimeoutSec 45
 }
-function Get-StatusDir {
-  if ($ServerDir -and (Test-Path -LiteralPath $ServerDir)) { return (Join-Path $ServerDir 'status') }
-  Join-Path $ShareDir 'status'
+function Get-BizDate([datetime]$t) { $t.AddHours(-$ReportHour).ToString('yyyy-MM-dd') }
+function Get-SrvDir([string]$sub) { $b = $ShareDir; if ($ServerDir -and (Test-Path -LiteralPath $ServerDir)) { $b = $ServerDir }; Join-Path $b $sub }
+function Send-Tg([string]$text, $extra) {
+  $b = @{ chat_id = $BotOwner; text = $text; parse_mode = 'HTML'; disable_web_page_preview = $true }
+  if ($extra) { foreach ($k in $extra.Keys) { $b[$k] = $extra[$k] } }
+  try { Tg 'sendMessage' $b | Out-Null; $true } catch { Log "Gondermek olmadi: $($_.Exception.Message)"; $false }
+}
+function HtmlEsc([string]$s) { $s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;' }
+function Get-PcSortKey([string]$n) { [regex]::Replace($n, '\d+', { param($m) $m.Value.PadLeft(4, '0') }) }
+function Read-StatusFiles {
+  $r = @()
+  $sd = Get-SrvDir 'status'
+  foreach ($f in @(Get-ChildItem -LiteralPath $sd -Filter '*.txt' -File -ErrorAction SilentlyContinue)) {
+    $p = @(); try { $p = ([IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)) -split '\|' } catch {}
+    $o = @{ PC = $f.BaseName; Age = ((Get-Date) - $f.LastWriteTime).TotalSeconds; Game = ''; Fg = ''; Idle = 0; Disk = -1; Ping = -1; Cpu = -1; Ram = -1; GpuT = -1; GpuU = -1; Vram = -1; SteamDl = '0'; Line = ($p -join '|') }
+    if ($p.Count -ge 4) { $o.Game = $p[1]; $o.Fg = $p[2]; $o.Idle = [int]$p[3] }
+    if ($p.Count -ge 13) { $o.Disk = $p[4]; $o.Ping = $p[5]; $o.Cpu = $p[6]; $o.Ram = $p[7]; $o.GpuT = $p[8]; $o.GpuU = $p[9]; $o.Vram = $p[10]; $o.SteamDl = $p[11] }
+    $r += $o
+  }
+  @($r | Sort-Object { Get-PcSortKey $_.PC })
 }
 function Get-MasaReport {
-  $sd = Get-StatusDir
-  $now = Get-Date
   $rows = New-Object System.Collections.Generic.List[string]
   $off = New-Object System.Collections.Generic.List[string]
   $on = 0; $play = 0
-  $files = @(Get-ChildItem -LiteralPath $sd -Filter '*.txt' -File -ErrorAction SilentlyContinue | Sort-Object { [regex]::Replace($_.BaseName, '\d+', { param($m) $m.Value.PadLeft(4, '0') }) })
-  foreach ($f in $files) {
-    $pc = $f.BaseName
-    if (($now - $f.LastWriteTime).TotalSeconds -gt 120) { $off.Add($pc); continue }
+  foreach ($s in (Read-StatusFiles)) {
+    if ($s.Age -gt 120) { $off.Add($s.PC); continue }
     $on++
-    $p = ([IO.File]::ReadAllText($f.FullName, [Text.Encoding]::UTF8)) -split '\|'
-    $game = ''; $fg = ''; $idle = 0
-    if ($p.Count -ge 4) { $game = $p[1]; $fg = $p[2]; $idle = [int]$p[3] }
-    if ($game) { $play++; $st = $game }
-    elseif ($fg -eq 'PanCafe') { $st = 'bos (PanCafe ekrani)' }
-    elseif ($fg) { $st = $fg } else { $st = 'acik' }
-    if (-not $game -and $idle -ge 300) { $st += (' - {0} dq toxunulmur' -f [int]($idle / 60)) }
-    $rows.Add(('{0,-7} {1}' -f $pc, $st))
+    if ($s.Game) { $play++; $st = $s.Game }
+    elseif ($s.Fg -eq 'PanCafe') { $st = 'bos (PanCafe ekrani)' }
+    elseif ($s.Fg) { $st = $s.Fg } else { $st = 'acik' }
+    if (-not $s.Game -and $s.Idle -ge 300) { $st += (' - {0} dq toxunulmur' -f [int]($s.Idle / 60)) }
+    $rows.Add(('{0,-7} {1}' -f $s.PC, $st))
   }
-  $esc = { param($s) ($s -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;') }
-  $t = "<b>$(& $esc $ClubName)</b>  $(Get-Date -Format 'HH:mm')`n"
+  $t = "<b>$(HtmlEsc $ClubName)</b>  $(Get-Date -Format 'HH:mm')`n"
   $t += "Acik: <b>$on</b>  |  Oyunda: <b>$play</b>  |  Sonuk: <b>$($off.Count)</b>`n"
-  if ($rows.Count) { $t += '<pre>' + (& $esc ($rows -join "`n")) + '</pre>' } else { $t += "`nHec bir masa melumat gondermir." }
-  if ($off.Count) { $t += "`nSonuk: " + (& $esc ($off -join ', ')) }
+  if ($rows.Count) { $t += '<pre>' + (HtmlEsc ($rows -join "`n")) + '</pre>' } else { $t += "`nHec bir masa melumat gondermir." }
+  if ($off.Count) { $t += "`nSonuk: " + (HtmlEsc ($off -join ', ')) }
   if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
   $t
 }
+function Get-PcReport([string]$name) {
+  $s = Read-StatusFiles | Where-Object { $_.PC -eq $name } | Select-Object -First 1
+  if (-not $s) { return "$(HtmlEsc $name) tapilmadi. Meselen: /pc PC-07" }
+  $t = "<b>$(HtmlEsc $s.PC)</b>  (son melumat $([int]$s.Age) san evvel)`n"
+  $t += "Oyun: $(HtmlEsc $s.Game)  | On planda: $(HtmlEsc $s.Fg)  | Toxunulmur: $([int]($s.Idle/60)) dq`n"
+  $t += "Disk gecikmesi: $($s.Disk) ms | Ping: $($s.Ping) ms | CPU: $($s.Cpu)% | RAM: $($s.Ram)%`n"
+  $t += "GPU: $($s.GpuT) C, $($s.GpuU)% | VRAM: $($s.Vram)% | Steam yukleyir: $(if ($s.SteamDl -eq '1') { 'beli' } else { 'yox' })`n"
+  $inc = @(Read-IncidentRows (Get-BizDate (Get-Date)) | Where-Object { $_.PC -eq $s.PC })
+  $t += "Bu gun hadise: $($inc.Count)"
+  foreach ($i in ($inc | Select-Object -Last 5)) { $t += "`n- $($i.Time.Substring(11,5)) $(HtmlEsc $i.Type) $(HtmlEsc $i.Game): $(HtmlEsc $i.Cause)" }
+  $t
+}
+
+# --- server gostericileri ---
+function Get-ServerMetrics {
+  $m = @{ Ram = -1; DiskMs = -1; Free = '' ; FreeMin = 100; FreeLow = '' }
+  try { $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop; $m.Ram = [int](100 - ([double]$os.FreePhysicalMemory / [double]$os.TotalVisibleMemorySize * 100)) } catch {}
+  try {
+    $d = Get-CimInstance Win32_PerfRawData_PerfDisk_PhysicalDisk -Filter "Name='_Total'" -ErrorAction Stop
+    if ($BotState.DiskPrev) {
+      $p = $BotState.DiskPrev
+      $db = [double]$d.AvgDisksecPerRead_Base - [double]$p.AvgDisksecPerRead_Base
+      if ($db -gt 0) { $m.DiskMs = [math]::Round((([double]$d.AvgDisksecPerRead - [double]$p.AvgDisksecPerRead) / [double]$d.Frequency_PerfTime) / $db * 1000, 1) } else { $m.DiskMs = 0 }
+    }
+    $BotState.DiskPrev = $d
+  } catch {}
+  try {
+    $parts = @()
+    foreach ($ld in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' -ErrorAction Stop)) {
+      if ($ld.Size -gt 0) {
+        $pct = [int]([double]$ld.FreeSpace / [double]$ld.Size * 100)
+        $parts += ('{0}{1}%' -f $ld.DeviceID, $pct)
+        if ($pct -lt $m.FreeMin) { $m.FreeMin = $pct }
+        if ($pct -lt 10) { $m.FreeLow += ('{0} {1}% ({2} GB) ' -f $ld.DeviceID, $pct, [int]($ld.FreeSpace / 1GB)) }
+      }
+    }
+    $m.Free = $parts -join ' '
+  } catch {}
+  $m
+}
+function Can-Alert([string]$key, [int]$minutes) {
+  $n = Get-Date
+  if ($BotState.AlertLast.ContainsKey($key) -and ($n - $BotState.AlertLast[$key]).TotalMinutes -lt $minutes) { return $false }
+  $BotState.AlertLast[$key] = $n
+  $true
+}
+function Check-Server {
+  $m = Get-ServerMetrics
+  $BotState.Srv = $m
+  $bd = Get-BizDate (Get-Date)
+  if ($BotState.SrvDay -ne $bd) { $BotState.SrvDay = $bd; $BotState.SrvRamMax = 0; $BotState.SrvDiskMax = 0; $BotState.SrvFreeMin = 100 }
+  if ($m.Ram -gt $BotState.SrvRamMax) { $BotState.SrvRamMax = $m.Ram }
+  if ($m.DiskMs -gt $BotState.SrvDiskMax) { $BotState.SrvDiskMax = $m.DiskMs }
+  if ($m.FreeMin -lt $BotState.SrvFreeMin) { $BotState.SrvFreeMin = $m.FreeMin }
+  if ($m.Ram -ge 90) { $BotState.RamHigh++ } else { $BotState.RamHigh = 0 }
+  if ($BotState.RamHigh -ge 10 -and (Can-Alert 'srv|ram' 60)) {
+    Send-Tg ("$WarnIcon <b>Server RAM {0}%</b> (10 deqiqedir 90%-den coxdur)`nMasalarda donma ve gec acilma ola biler. Hell: server RAM-ini artirmaq." -f $m.Ram) | Out-Null
+    Add-IncidentRow (Get-Date) 'SERVER' 'server_ram' '' ('SERVER RAM {0}%' -f $m.Ram) ''
+  }
+  if ($m.FreeLow -and (Can-Alert 'srv|disk' 360)) {
+    Send-Tg ("$WarnIcon <b>Server diskinde yer azdir:</b> {0}" -f (HtmlEsc $m.FreeLow)) | Out-Null
+    Add-IncidentRow (Get-Date) 'SERVER' 'server_disk' '' ('DISK YERI AZ: ' + $m.FreeLow) ''
+  }
+}
+
+# --- hadise tarixcesi (bot yegane yazandir) ---
+function Add-IncidentRow([datetime]$t, [string]$pc, [string]$type, [string]$game, [string]$cause, [string]$sum) {
+  try {
+    $dir = Get-SrvDir 'tarix'; New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $f = Join-Path $dir 'hadiseler.csv'
+    if (-not (Test-Path -LiteralPath $f)) { [IO.File]::WriteAllText($f, "gun;vaxt;pc;nov;oyun;sebeb;gostericiler`r`n", (New-Object Text.UTF8Encoding($false))) }
+    $row = (@((Get-BizDate $t), $t.ToString('yyyy-MM-dd HH:mm:ss'), $pc, $type, $game, $cause, $sum) | ForEach-Object { ([string]$_) -replace '[;\r\n]', ' ' }) -join ';'
+    [IO.File]::AppendAllText($f, $row + "`r`n", (New-Object Text.UTF8Encoding($false)))
+  } catch { Log "Tarixce yazilmadi: $($_.Exception.Message)" }
+}
+function Read-IncidentRows([string]$bizDate) {
+  $f = Join-Path (Get-SrvDir 'tarix') 'hadiseler.csv'
+  $r = @()
+  if (-not (Test-Path -LiteralPath $f)) { return $r }
+  foreach ($l in [IO.File]::ReadAllLines($f, [Text.Encoding]::UTF8)) {
+    $p = $l -split ';'
+    if ($p.Count -lt 7 -or $p[0] -eq 'gun') { continue }
+    if ($bizDate -and $p[0] -ne $bizDate) { continue }
+    if ($p[3] -eq 'test') { continue }
+    $r += @{ Day = $p[0]; Time = $p[1]; PC = $p[2]; Type = $p[3]; Game = $p[4]; Cause = $p[5]; Sum = $p[6] }
+  }
+  $r
+}
+$TypeNames = @{ donma = 'Donma (cavab vermir)'; donma_son = 'Donma bitdi'; donma_baglandi = 'Donub baglandi'; cokme = 'Oyun cokdu'; driver = 'Video driver cokdu / qara ekran'; hardware = 'Hardware xetasi (WHEA)'; monitor = 'Monitor ayrildi'; sondu = 'Qefil sondu (oyunda idi)'; server_ram = 'Server RAM'; server_disk = 'Server disk'; test = 'TEST' }
+function Get-TypeName([string]$t) { if ($TypeNames.ContainsKey($t)) { $TypeNames[$t] } else { $t } }
+function Get-CauseKey([string]$c) { if ($c -match '^([^(]+)') { $matches[1].Trim() } else { $c } }
+
+function Process-Incidents {
+  $in = Join-Path (Get-SrvDir 'hadise') 'new'
+  if (-not (Test-Path -LiteralPath $in)) { return }
+  foreach ($f in @(Get-ChildItem -LiteralPath $in -Filter '*.txt' -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+    $h = @{}
+    try { foreach ($l in [IO.File]::ReadAllLines($f.FullName, [Text.Encoding]::UTF8)) { if ($l -match '^([A-Z]+)=(.*)$') { $h[$matches[1]] = $matches[2] } elseif ($l -eq '') { break } } } catch { continue }
+    $t = Get-Date; try { $t = [datetime]::ParseExact($h['TIME'], 'yyyy-MM-dd HH:mm:ss', $null) } catch {}
+    $bd = Get-BizDate $t
+    $dst = Join-Path (Get-SrvDir 'hadise') $bd
+    New-Item -ItemType Directory -Path $dst -Force | Out-Null
+    try { Move-Item -LiteralPath $f.FullName -Destination (Join-Path $dst $f.Name) -Force -ErrorAction Stop } catch { continue }
+    Handle-Incident $t $h['PC'] $h['TYPE'] $h['GAME'] $h['CAUSE'] $h['SUMMARY'] $h['DETAIL'] $h['TOP'] $h['INFO']
+  }
+}
+function Handle-Incident([datetime]$t, [string]$pc, [string]$type, [string]$game, [string]$cause, [string]$sum, [string]$detail, [string]$top, [string]$info) {
+  Add-IncidentRow $t $pc $type $game $cause $sum
+  $now = Get-Date
+  $BotState.Recent = @($BotState.Recent | Where-Object { ($now - $_.T).TotalMinutes -lt 10 })
+  $same = @($BotState.Recent | Where-Object { $_.PC -ne $pc -and [math]::Abs(($_.T - $t).TotalSeconds) -le 90 -and $_.Type -ne 'donma_son' } | ForEach-Object { $_.PC } | Select-Object -Unique)
+  $BotState.Recent += @{ T = $t; PC = $pc; Type = $type }
+  if ($type -eq 'donma_son') {
+    if (Can-Alert "$pc|donma_son" 30) { Send-Tg ("$OkIcon {0}: {1}" -f (HtmlEsc $pc), (HtmlEsc $detail)) | Out-Null }
+    return
+  }
+  if (-not (Can-Alert "$pc|$type" 30)) { return }
+  $icon = $WarnIcon; if ($type -in 'cokme', 'driver', 'hardware', 'sondu') { $icon = $ErrIcon }
+  $m = "$icon <b>$(HtmlEsc $pc): $(HtmlEsc (Get-TypeName $type))</b>"
+  if ($game) { $m += " - $(HtmlEsc $game)" }
+  $m += "  $($t.ToString('HH:mm'))`n"
+  if ($cause) { $m += "Ehtimal: <b>$(HtmlEsc $cause)</b>`n" }
+  if ($detail) { $m += "$(HtmlEsc $detail)`n" }
+  if ($sum) { $m += "<code>$(HtmlEsc $sum)</code>`n" }
+  if ($same.Count) {
+    $m += "Eyni anda problem: <b>$(HtmlEsc ($same -join ', '))</b>"
+    if ($same.Count -ge 2) { $m += ' -> sebeb boyuk ehtimalla SERVER/SEBEKE' }
+    $m += "`n"
+  }
+  if ($BotState.Srv) { $m += ("Server: RAM {0}% | disk {1} ms" -f $BotState.Srv.Ram, $BotState.Srv.DiskMs) }
+  Send-Tg $m | Out-Null
+}
+function Check-Offline {
+  foreach ($s in (Read-StatusFiles)) {
+    $st = $BotState.Pcs[$s.PC]
+    if (-not $st) { $st = @{ Online = ($s.Age -le 150); Game = $s.Game; Line = $s.Line }; $BotState.Pcs[$s.PC] = $st; continue }
+    if ($s.Age -le 150) { $st.Online = $true; $st.Game = $s.Game; $st.Line = $s.Line; continue }
+    if ($st.Online) {
+      $st.Online = $false
+      if ($st.Game) {
+        $sum = 'Son melumat: disk {0} ms | ping {1} | CPU {2}% | RAM {3}% | GPU {4} C' -f $s.Disk, $s.Ping, $s.Cpu, $s.Ram, $s.GpuT
+        Handle-Incident ((Get-Date).AddSeconds(-$s.Age)) $s.PC 'sondu' $st.Game 'Mavi ekran / donub qalma / elektrik / yeniden baslatma' $sum ('{0} oynayarken 2 deqiqeden coxdur cavab vermir' -f $st.Game) '' ''
+      }
+    }
+  }
+}
+
+# --- gunluk tarixce (5 deqiqeden bir) ---
+function Save-Snapshot {
+  $on = 0; $play = 0; $games = @{}
+  foreach ($s in (Read-StatusFiles)) {
+    if ($s.Age -gt 120) { continue }
+    $on++
+    if ($s.Game) { $play++; $g = $s.Game -replace '[;=,]', ' '; if ($games.ContainsKey($g)) { $games[$g]++ } else { $games[$g] = 1 } }
+  }
+  try {
+    $dir = Get-SrvDir 'tarix'; New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $f = Join-Path $dir ('gun_{0}.csv' -f (Get-BizDate (Get-Date)))
+    if (-not (Test-Path -LiteralPath $f)) { [IO.File]::WriteAllText($f, "vaxt;acik;oyunda;oyunlar;server_ram;server_disk_ms;server_bos_disk`r`n", (New-Object Text.UTF8Encoding($false))) }
+    $gs = ($games.Keys | ForEach-Object { "$_=$($games[$_])" }) -join ','
+    $sv = $BotState.Srv; $r = -1; $dk = -1; $fr = ''; if ($sv) { $r = $sv.Ram; $dk = $sv.DiskMs; $fr = $sv.Free }
+    [IO.File]::AppendAllText($f, ('{0};{1};{2};{3};{4};{5};{6}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm'), $on, $play, $gs, $r, $dk, $fr) + "`r`n", (New-Object Text.UTF8Encoding($false)))
+  } catch { Log "Snapshot yazilmadi: $($_.Exception.Message)" }
+}
+function Read-Snapshots([string]$bizDate) {
+  $f = Join-Path (Get-SrvDir 'tarix') ('gun_{0}.csv' -f $bizDate)
+  $r = @()
+  if (-not (Test-Path -LiteralPath $f)) { return $r }
+  foreach ($l in [IO.File]::ReadAllLines($f, [Text.Encoding]::UTF8)) {
+    $p = $l -split ';'
+    if ($p.Count -lt 6 -or $p[0] -eq 'vaxt') { continue }
+    $r += @{ T = [datetime]::ParseExact($p[0], 'yyyy-MM-dd HH:mm', $null); On = [int]$p[1]; Play = [int]$p[2]; Games = $p[3]; Ram = [double]$p[4]; Disk = [double]$p[5]; Free = $(if ($p.Count -ge 7) { $p[6] } else { '' }) }
+  }
+  $r
+}
+function Get-DayReport([string]$bizDate, [bool]$partial) {
+  $snaps = @(Read-Snapshots $bizDate)
+  $inc = @(Read-IncidentRows $bizDate | Where-Object { $_.Type -ne 'donma_son' })
+  $t = "<b>$(HtmlEsc $ClubName) - gun hesabati $bizDate</b>"
+  if ($partial) { $t += ' (indiye qeder)' }
+  $t += "`n"
+  if ($snaps.Count) {
+    $peak = $snaps | Sort-Object { $_.Play } -Descending | Select-Object -First 1
+    $peakOn = ($snaps | ForEach-Object { $_.On } | Measure-Object -Maximum).Maximum
+    $avg = [math]::Round((($snaps | ForEach-Object { $_.Play }) | Measure-Object -Average).Average, 1)
+    $t += "`n<b>Doluluq</b>`nPik: $($peak.Play) masa oyunda ($($peak.T.ToString('HH:mm'))) | max acik: $peakOn`nOrta oyunda: $avg`n"
+    $hours = @{}
+    foreach ($s in $snaps) { $h = $s.T.Hour; if (-not $hours.ContainsKey($h)) { $hours[$h] = New-Object System.Collections.Generic.List[int] }; $hours[$h].Add($s.Play) }
+    $hk = @($hours.Keys | Sort-Object { ($_ - $ReportHour + 24) % 24 })
+    $mx = 1; foreach ($h in $hk) { $a = ($hours[$h] | Measure-Object -Average).Average; if ($a -gt $mx) { $mx = $a } }
+    $lines = foreach ($h in $hk) { $a = [math]::Round(($hours[$h] | Measure-Object -Average).Average); '{0:00}:00 {1} {2}' -f $h, ('#' * [int][math]::Ceiling($a / $mx * 16)), $a }
+    $t += '<pre>' + (HtmlEsc ($lines -join "`n")) + '</pre>'
+    $gm = @{}
+    foreach ($s in $snaps) { foreach ($kv in ($s.Games -split ',')) { if ($kv -match '^(.+)=(\d+)$') { $n = $matches[1]; $gm[$n] = [int]$gm[$n] + [int]$matches[2] } } }
+    if ($gm.Count) {
+      $t += "<b>Oyunlar</b> (masa-saat)`n"
+      foreach ($g in ($gm.Keys | Sort-Object { $gm[$_] } -Descending | Select-Object -First 8)) { $t += ('{0}: {1}' -f (HtmlEsc $g), [math]::Round($gm[$g] * 5 / 60, 1)) + "`n" }
+    }
+    $rmx = ($snaps | ForEach-Object { $_.Ram } | Measure-Object -Maximum).Maximum
+    $dmx = ($snaps | ForEach-Object { $_.Disk } | Measure-Object -Maximum).Maximum
+    $lastFree = ($snaps | Select-Object -Last 1).Free
+    $t += "`n<b>Server</b>`nMax RAM: $rmx% | max disk gecikmesi: $dmx ms`nBos disk: $(HtmlEsc $lastFree)`n"
+  } else { $t += "`nDoluluq melumati yoxdur.`n" }
+  $t += "`n<b>Problemler: $($inc.Count)</b>`n"
+  if ($inc.Count) {
+    $t += 'Nove gore: ' + ((($inc | Group-Object { $_.Type } | Sort-Object Count -Descending) | ForEach-Object { '{0} {1}' -f (Get-TypeName $_.Name), $_.Count }) -join ', ') + "`n"
+    $t += 'Sebebe gore: ' + ((($inc | Where-Object { $_.Cause } | Group-Object { Get-CauseKey $_.Cause } | Sort-Object Count -Descending) | ForEach-Object { '{0} {1}' -f (HtmlEsc $_.Name), $_.Count }) -join ', ') + "`n"
+    $t += 'En cox problem: ' + ((($inc | Where-Object { $_.PC -ne 'SERVER' } | Group-Object { $_.PC } | Sort-Object Count -Descending | Select-Object -First 5) | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Count }) -join ', ') + "`n"
+    $hh = $inc | Group-Object { $_.Time.Substring(11, 2) } | Sort-Object Count -Descending | Select-Object -First 3
+    $t += 'En problemli saatlar: ' + (($hh | ForEach-Object { '{0}:00 ({1})' -f $_.Name, $_.Count }) -join ', ')
+  }
+  if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
+  $t
+}
+function Get-WeekReport {
+  $t = "<b>$(HtmlEsc $ClubName) - son 7 gun</b>`n<pre>"
+  $all = @()
+  $rows = @()
+  for ($i = 6; $i -ge 0; $i--) {
+    $bd = Get-BizDate ((Get-Date).AddDays(-$i))
+    $sn = @(Read-Snapshots $bd)
+    $inc = @(Read-IncidentRows $bd | Where-Object { $_.Type -ne 'donma_son' })
+    $all += $inc
+    $pk = 0; if ($sn.Count) { $pk = ($sn | ForEach-Object { $_.Play } | Measure-Object -Maximum).Maximum }
+    $rows += ('{0} pik {1,3} | problem {2,3}' -f $bd.Substring(5), $pk, $inc.Count)
+  }
+  $t += (HtmlEsc ($rows -join "`n")) + '</pre>'
+  if ($all.Count) {
+    $t += "<b>Sebebler</b>`n" + ((($all | Where-Object { $_.Cause } | Group-Object { Get-CauseKey $_.Cause } | Sort-Object Count -Descending | Select-Object -First 8) | ForEach-Object { '{0}: {1}' -f (HtmlEsc $_.Name), $_.Count }) -join "`n") + "`n"
+    $t += "<b>Nove gore</b>`n" + ((($all | Group-Object { $_.Type } | Sort-Object Count -Descending) | ForEach-Object { '{0}: {1}' -f (Get-TypeName $_.Name), $_.Count }) -join "`n") + "`n"
+    $t += "<b>En problemli masalar</b>`n" + ((($all | Where-Object { $_.PC -ne 'SERVER' } | Group-Object { $_.PC } | Sort-Object Count -Descending | Select-Object -First 8) | ForEach-Object { '{0}: {1}' -f $_.Name, $_.Count }) -join "`n")
+  } else { $t += 'Problem qeyde alinmayib.' }
+  $t += "`n`nTam melumat serverde: $(HtmlEsc (Get-SrvDir 'tarix')) ve hadise\"
+  if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
+  $t
+}
+function Get-ProblemList {
+  $inc = @(Read-IncidentRows (Get-BizDate (Get-Date)) | Where-Object { $_.Type -ne 'donma_son' } | Select-Object -Last 20)
+  if (-not $inc.Count) { return 'Bu gun problem qeyde alinmayib.' }
+  $t = "<b>Bu gunun problemleri (son $($inc.Count))</b>`n"
+  foreach ($i in $inc) { $t += ('{0} {1} {2} {3}: {4}' -f $i.Time.Substring(11, 5), (HtmlEsc $i.PC), (HtmlEsc (Get-TypeName $i.Type)), (HtmlEsc $i.Game), (HtmlEsc $i.Cause)) + "`n" }
+  if ($t.Length -gt 4000) { $t = $t.Substring(0, 4000) }
+  $t
+}
+
 function Run-Bot {
   $LogFile = Join-Path $WorkDir 'bot_log.txt'
-  $m = New-Object System.Threading.Mutex($false, 'Global\cs2opt_bot')
-  $got = $false; try { $got = $m.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
+  $mx = New-Object System.Threading.Mutex($false, 'Global\cs2opt_bot')
+  $got = $false; try { $got = $mx.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
   if (-not $got) { return }
-  Set-Content -LiteralPath $LogFile -Value ("=== Masa bot  {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+  Set-Content -LiteralPath $LogFile -Value ("=== Masa bot v5  {0} ===" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
   try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
   $cfg = Get-BotCfg
-  $script:BotToken = $cfg['token']
+  $BotToken = $cfg['token']
   if (-not $BotToken) { Log 'XETA: token yoxdur. Evvelce: CS2_Optimizer.bat botsetup'; return }
-  Log "Status qovlugu: $(Get-StatusDir)"
-  $kb = @{ keyboard = @(, @(@{ text = 'Masalar' })); resize_keyboard = $true; is_persistent = $true }
+  $BotOwner = $cfg['owner']
+  $BotState = @{ AlertLast = @{}; Recent = @(); Pcs = @{}; Srv = $null; DiskPrev = $null; RamHigh = 0; SrvDay = ''; SrvRamMax = 0; SrvDiskMax = 0; SrvFreeMin = 100 }
+  Log "Status qovlugu: $(Get-SrvDir 'status')"
+  $kb = @{ keyboard = @(@(@{ text = 'Masalar' }, @{ text = 'Problemler' }), @(@{ text = 'Hesabat' }, @{ text = 'Heftelik' })); resize_keyboard = $true; is_persistent = $true }
   $offset = 0
   try { $r = Tg 'getUpdates' @{ offset = -1; timeout = 0 }; if ($r.result) { $offset = [long]$r.result[-1].update_id + 1 } } catch {}
+  Check-Server
+  Check-Offline
+  try { $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime; if (((Get-Date) - $boot).TotalMinutes -lt 15 -and $BotOwner) { Send-Tg ("$WarnIcon <b>Server yeniden basladi</b> ({0:HH:mm})" -f $boot) | Out-Null; Add-IncidentRow $boot 'SERVER' 'server_restart' '' 'SERVER YENIDEN BASLADI' '' } } catch {}
+  $tSrv = Get-Date; $tSnap = (Get-Date).AddMinutes(-10); $tOff = Get-Date
   Log 'Bot basladi'
   while ($true) {
-    try { $r = Tg 'getUpdates' @{ offset = $offset; timeout = 25; allowed_updates = @('message') } }
-    catch { Log "Telegram xetasi: $($_.Exception.Message)"; Start-Sleep -Seconds 15; continue }
+    try { $r = Tg 'getUpdates' @{ offset = $offset; timeout = 10; allowed_updates = @('message') } }
+    catch { Log "Telegram xetasi: $($_.Exception.Message)"; Start-Sleep -Seconds 10; $r = $null }
     foreach ($u in @($r.result)) {
       if (-not $u) { continue }
       $offset = [long]$u.update_id + 1
       $msg = $u.message; if (-not $msg) { continue }
       $chat = [string]$msg.chat.id; $txt = ([string]$msg.text).Trim()
-      if (-not $cfg['owner']) {
-        if ($txt -like '/start*') { $cfg['owner'] = $chat; Save-BotCfg $cfg; Log "Sahib qeyd olundu: $chat" } else { continue }
+      if (-not $BotOwner) {
+        if ($txt -like '/start*') { $cfg['owner'] = $chat; $BotOwner = $chat; Save-BotCfg $cfg; Log "Sahib qeyd olundu: $chat" } else { continue }
       }
       try {
-        if ($chat -ne $cfg['owner']) { Tg 'sendMessage' @{ chat_id = $chat; text = 'Bu bot sexsidir.' } | Out-Null; Log "Icazesiz cehd: $chat"; continue }
-        if ($txt -match '^(/start|/masalar|masalar|/m)\b' -or $txt -eq 'Masalar') {
-          Tg 'sendMessage' @{ chat_id = $chat; text = (Get-MasaReport); parse_mode = 'HTML'; reply_markup = $kb } | Out-Null
-        } else {
-          Tg 'sendMessage' @{ chat_id = $chat; text = 'Masalari gormek ucun asagidaki "Masalar" duymesine basin ve ya /masalar yazin.'; reply_markup = $kb } | Out-Null
-        }
-      } catch { Log "Gondermek olmadi: $($_.Exception.Message)" }
+        if ($chat -ne $BotOwner) { Tg 'sendMessage' @{ chat_id = $chat; text = 'Bu bot sexsidir.' } | Out-Null; Log "Icazesiz cehd: $chat"; continue }
+        $low = $txt.ToLowerInvariant()
+        if ($low -match '^/?(start|masalar|m)$') { Send-Tg (Get-MasaReport) @{ reply_markup = $kb } | Out-Null }
+        elseif ($low -match '^/?(problemler|p)$') { Send-Tg (Get-ProblemList) @{ reply_markup = $kb } | Out-Null }
+        elseif ($low -match '^/?(hesabat|h)$') { Send-Tg (Get-DayReport (Get-BizDate (Get-Date)) $true) @{ reply_markup = $kb } | Out-Null }
+        elseif ($low -match '^/?(heftelik|hefte|w)$') { Send-Tg (Get-WeekReport) @{ reply_markup = $kb } | Out-Null }
+        elseif ($low -match '^/?pc\s+(\S+)$') { $n = $matches[1].ToUpperInvariant(); if ($n -match '^\d+$') { $n = 'PC-{0:00}' -f [int]$n }; Send-Tg (Get-PcReport $n) @{ reply_markup = $kb } | Out-Null }
+        else { Send-Tg "Emrler: Masalar, Problemler, Hesabat, Heftelik, /pc PC-07" @{ reply_markup = $kb } | Out-Null }
+      } catch { Log "Emr xetasi: $($_.Exception.Message)" }
+    }
+    if (-not $BotOwner) { continue }
+    try { Process-Incidents } catch { Log "Hadise emali xetasi: $($_.Exception.Message)" }
+    $now = Get-Date
+    if (($now - $tOff).TotalSeconds -ge 30) { $tOff = $now; try { Check-Offline } catch { Log "Offline yoxlama xetasi: $($_.Exception.Message)" } }
+    if (($now - $tSrv).TotalSeconds -ge 60) { $tSrv = $now; try { Check-Server } catch { Log "Server yoxlama xetasi: $($_.Exception.Message)" } }
+    if (($now - $tSnap).TotalMinutes -ge 5) { $tSnap = $now; Save-Snapshot }
+    if ($now.Hour -eq $ReportHour) {
+      $rd = Get-BizDate ($now.AddDays(-1))
+      if ($cfg['lastreport'] -ne $rd) {
+        $cfg['lastreport'] = $rd; Save-BotCfg $cfg
+        Send-Tg (Get-DayReport $rd $false) | Out-Null
+        if ($now.DayOfWeek -eq 'Monday') { Send-Tg (Get-WeekReport) | Out-Null }
+        Log "Gun hesabati gonderildi: $rd"
+      }
     }
   }
 }
+
 function Setup-Bot {
   Write-Host '=== Telegram masa botunun qurasdirilmasi (SERVERDE isledin) ===' -ForegroundColor Cyan
   if (-not $IsAdmin) { Write-Host 'XETA: sag klik > Yonetici olarak calistir.' -ForegroundColor Red; return }
@@ -642,7 +1117,7 @@ function Setup-Bot {
 }
 
 function Start-Daemon {
-  Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoLogo', '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', '& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF)))')
+  Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @('-NoLogo', '-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-Command', '. ([ScriptBlock]::Create([IO.File]::ReadAllText($env:CS2OPT_SELF)))')
 }
 
 # CS2-nin menyuya qeder oxudugu hisseler (19.11.2026 olcusu). Serverde
@@ -1218,6 +1693,17 @@ if ($Mode -eq 'image') {
   return
 }
 
+if ($Mode -eq 'diagtest') {
+  $SI = Get-SysInfo; $VideoText = Get-VideoCfgText; Init-Status
+  Write-Host 'Gostericiler toplanir (12 saniye)...'
+  for ($i = 0; $i -lt 4; $i++) { Sample-Diag; Start-Sleep -Seconds 3 }
+  $IncLast.Clear()
+  New-Incident 'test' 'TEST' 'Sinaq hadisesi (diagtest)' ''
+  $st = Get-DiagStats 60
+  Write-Host ("Disk max {0} ms, ping max {1} ms, itki {2}, CPU {3}%, RAM {4}%, GPU {5} C" -f $st.DiskMax, $st.PingMax, $st.Loss, $st.CpuMax, $st.RamMax, $st.GpuT)
+  Write-Host 'Test hadisesi yazildi. Bot 10-20 saniye erzinde Telegram-a gondermelidir.' -ForegroundColor Green
+  return
+}
 if ($Mode -eq 'botsetup') { Setup-Bot; return }
 if ($Mode -eq 'bot') { Run-Bot; return }
 if ($Mode -eq 'play') {
@@ -1234,7 +1720,7 @@ $Mutex = New-Object System.Threading.Mutex($false, 'Global\cs2opt_daemon')
 $got = $false; try { $got = $Mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
 if (-not $got) { return }
 
-Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v4.1  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v5  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
 Log ("Istifadeci: {0}  admin={1}  system={2}" -f $Me.Name, $IsAdmin, $IsSystem)
 
 # Oyun diski gec qosula biler: 5 deqiqeye qeder gozle
@@ -1249,7 +1735,7 @@ $SI = Get-SysInfo
 Log ("Sistem: {0} (driver {1}) | {2}x{3} {6}Hz | {4} ({5})" -f $SI.GpuName, $SI.Driver, $SI.W, $SI.H, $SI.CpuName, $SI.CpuType, $SI.Hz)
 $VideoText = Get-VideoCfgText
 Log ("Qrafika profili: {0} (kart sinfi: {1})" -f $QualityUsed, $SI.Tier)
-try { $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop; if ($dg.VirtualizationBasedSecurityStatus -eq 2) { Log 'DIQQET: VBS / Memory Integrity ACIQDIR (FPS-i ~3% azaldir). Super rejimde: CS2_Optimizer.bat image' } else { Log 'VBS sondurulub' } } catch {}
+try { $dg = Get-CimInstance -Namespace root\Microsoft\Windows\DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop; if ($dg.VirtualizationBasedSecurityStatus -eq 2) { $VbsOn = 'ACIQ'; Log 'DIQQET: VBS / Memory Integrity ACIQDIR (FPS-i ~3% azaldir). Super rejimde: CS2_Optimizer.bat image' } else { $VbsOn = 'sonuk'; Log 'VBS sondurulub' } } catch {}
 
 Apply-MachineTweaks
 Write-Autoexec
@@ -1291,6 +1777,9 @@ while ($true) {
     foreach ($ctx in (Get-UserContexts)) { Collect-Shader $ctx }
     Push-Log
   }
+  try { Sample-Diag } catch {}
+  Check-Shutdown
+  if ($tick % 5 -eq 0) { try { Check-Events } catch {} }
   Start-Sleep -Seconds 3
   $tick++
   if ($tick % 10 -eq 0) { Write-Status }
