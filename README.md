@@ -12,7 +12,7 @@ Runs hidden in the background when the PC boots (nothing is shown on screen) and
 
 - Detects the GPU, screen resolution and CPU type
 - Picks a graphics profile from the GPU (high: 4x MSAA + 16x AF / mid: 2x MSAA / low: CMAA2; set `$Quality` to force one profile on all PCs) so the image stays clean without losing much FPS, and writes `cs2_video.txt` for **every** Steam account on the PC, including accounts that log in later (players can still change it in game)
-- Writes `autoexec.cfg`, applies Windows game settings (Game DVR off, Game Mode on, high-performance GPU, fullscreen optimizations off) and the right power plan for the CPU (dual-CCD X3D CPUs keep *Balanced*)
+- Writes `autoexec.cfg`, applies Windows game settings (Game DVR off, Game Mode on, high-performance GPU, fullscreen optimizations left ON to avoid black screens on alt-tab) and the right power plan for the CPU (dual-CCD X3D CPUs keep *Balanced*)
 - Applies NVIDIA driver settings silently if `nvidiaProfileInspector.exe` sits next to the script
 - **Shader cache sharing:** restores the NVIDIA shader cache from a server share before CS2 starts, and collects it back after CS2 closes (archived by GPU model + driver version)
 - **Pre-warm:** reads the exact parts of the CS2 files the game needs to reach the main menu into RAM, so the first launch is fast

@@ -14,7 +14,7 @@ exit /b
 #>
 param([string]$Mode = '')
 # =====================================================================
-#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v4 (goruntu + FPS balansi + Telegram masa statusu)
+#  CS2 OPTIMIZER (NetCafe) - TEK FAYL, v4.1 (goruntu + FPS balansi + Telegram masa statusu)
 #  Muellif: yusifcatharsis (github.com/yusifcatharsis) | Telegram: @jeisterx
 #  Lisenziya: MIT | https://github.com/yusifcatharsis/cs2-netcafe-optimizer
 #
@@ -201,7 +201,7 @@ function Get-VideoCfgText {
 	"setting.coop_fullscreen"		"0"
 	"setting.nowindowborder"		"0"
 	"setting.mat_vsync"		"0"
-	"setting.fullscreen_min_on_focus_loss"		"1"
+	"setting.fullscreen_min_on_focus_loss"		"0"
 	"setting.high_dpi"		"0"
 	"AutoConfig"		"0"
 	"setting.r_low_latency"		"$rf"
@@ -280,7 +280,9 @@ function Apply-UserTweaks($ctx) {
   Set-Reg "$r\Software\Microsoft\GameBar" 'AllowAutoGameMode' 1 'DWord'
   if ($SI.CpuType -ne 'X3D_DUAL') { Set-Reg "$r\Software\Microsoft\GameBar" 'UseNexusForGameBarEnabled' 0 'DWord' }
   Set-Reg "$r\Software\Microsoft\DirectX\UserGpuPreferences" $Cs2Exe 'GpuPreference=2;' 'String'
-  Set-Reg "$r\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers" $Cs2Exe '~ DISABLEDXMAXIMIZEDWINDOWEDMODE' 'String'
+  # Fullscreen optimizations SONDURULMUR: kohne versiyanin qoydugu bayragi silir.
+  # Exclusive fullscreen 500 Hz DSC monitorlarda her fokus itkisinde 3-10 san qara ekran verir.
+  try { $lk = "$r\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers"; $v = (Get-ItemProperty -LiteralPath $lk -ErrorAction Stop).$Cs2Exe; if ($v -match 'DISABLEDXMAXIMIZEDWINDOWEDMODE') { Remove-ItemProperty -LiteralPath $lk -Name $Cs2Exe -ErrorAction Stop } } catch {}
   Log "Windows oyun ayarlari: $($ctx.Key)"
 }
 function Apply-Nvidia {
@@ -1232,7 +1234,7 @@ $Mutex = New-Object System.Threading.Mutex($false, 'Global\cs2opt_daemon')
 $got = $false; try { $got = $Mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $got = $true } catch { $got = $false }
 if (-not $got) { return }
 
-Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v4  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
+Set-Content -LiteralPath $LogFile -Value ("=== CS2 Optimizer v4.1  {0}  {1} ===" -f $env:COMPUTERNAME, (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')) -Encoding ASCII
 Log ("Istifadeci: {0}  admin={1}  system={2}" -f $Me.Name, $IsAdmin, $IsSystem)
 
 # Oyun diski gec qosula biler: 5 deqiqeye qeder gozle
